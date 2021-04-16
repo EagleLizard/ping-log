@@ -13,15 +13,18 @@ import { getFileHash, getHashes } from './hash-log';
 import { CsvLogMeta, _HashLogMetaValue } from './csv-log-meta';
 import { CsvWriter, writeCsv } from '../lib/csv-writer';
 import { scanLog } from '../lib/csv-read';
+import { converCsvLog, CsvConvertResult } from './convert-csv-log';
+import { getRecordId, initializeRecordId } from './record-id';
+import { initRecordDb, incrementRecordId } from '../db/record-id-db';
 
 const NUM_CPUS = os.cpus().length;
 const CSV_CHUNK_SIZE = Math.round(
   // 1
-  // NUM_CPUS - 1
+  NUM_CPUS - 1
   // NUM_CPUS * 4
   // NUM_CPUS * Math.E
   // NUM_CPUS * Math.LOG2E
-  NUM_CPUS / Math.E
+  // NUM_CPUS / Math.E
   // NUM_CPUS / Math.LOG2E
   // NUM_CPUS / 4
 );
@@ -35,22 +38,12 @@ const PER_DATE_SLEEP_MS = 32;
 const WEEK_AGO_MS = Date.now() - (1000 * 60 * 60 * 24 * 7);
 const YEAR_AGO_MS = Date.now() - (1000 * 60 * 60 * 24 * 365);
 
-let recordIdCounter: number;
-function getRecordId() {
-  let nextId: number;
-  nextId = ++recordIdCounter;
-  if(recordIdCounter > Number.MAX_SAFE_INTEGER) {
-    throw new Error(`Record ID integer exceeded MAX_SAFE_INTEGER: ${recordIdCounter}`);
-  }
-  return nextId;
-}
-
 export async function convertCsvLogs() {
-  console.log(`NUM_CPUS: ${NUM_CPUS}`);
-  console.log(`CHUNK SIZE: ${CSV_CHUNK_SIZE}`);
-  console.log(`PER_FILE_SLEEP_MS: ${PER_FILE_SLEEP_MS}`);
-  console.log(`PER_CHUNK_SLEEP_MS: ${PER_CHUNK_SLEEP_MS}`);
-  console.log(`PER_DATE_SLEEP_MS: ${PER_DATE_SLEEP_MS}`);
+  // console.log(`NUM_CPUS: ${NUM_CPUS}`);
+  // console.log(`CHUNK SIZE: ${CSV_CHUNK_SIZE}`);
+  // console.log(`PER_FILE_SLEEP_MS: ${PER_FILE_SLEEP_MS}`);
+  // console.log(`PER_CHUNK_SLEEP_MS: ${PER_CHUNK_SLEEP_MS}`);
+  // console.log(`PER_DATE_SLEEP_MS: ${PER_DATE_SLEEP_MS}`);
 
   let csvPaths: string[], csvDateMap: Map<string, string[]>,
     csvPathDates: CsvPathDate[];
@@ -59,7 +52,7 @@ export async function convertCsvLogs() {
   let _hashLogMeta: _HashLogMetaValue[];
   let fileHashTuples: [ string, string ][];
 
-  recordIdCounter = await CsvLogMeta.getLastId();
+  await initRecordDb();
 
   csvPaths = await listDir(CSV_PING_LOG_DIR);
 
@@ -98,13 +91,11 @@ export async function convertCsvLogs() {
     csvPathDates.splice(todayCsvPathDateIdx, 1);
   }
 
+  csvPathDates = csvPathDates.slice(-3);
+
   _hashLogMeta = await CsvLogMeta.getLogHashMeta();
 
   // console.log(hashLogMeta);
-  const csvPathFileSum = csvPathDates.reduce((acc, curr) => {
-    return acc + curr.csvPaths.length;
-  }, 0);
-  console.log(`Total filePaths: ${csvPathFileSum}`);
 
   /*
     only check limited hashes in the past, unless they aren't in the metadata
@@ -120,7 +111,11 @@ export async function convertCsvLogs() {
     });
     return missingMeta || (csvPathDate.date.valueOf() > WEEK_AGO_MS);
   });
-  console.log(csvPathDates.map(csvPathDate => csvPathDate.dateStr).join('\n'));
+  const csvPathFileSum = csvPathDates.reduce((acc, curr) => {
+    return acc + curr.csvPaths.length;
+  }, 0);
+  console.log(`Total filePaths: ${csvPathFileSum}`);
+  console.log(csvPathDates.map(csvPathDate => csvPathDate.dateStr).join(', '));
 
   fileHashTuples = await getHashes(csvPathDates, _hashLogMeta);
   csvPathDates = CsvLogMeta.filterHashedCsvPathDates(csvPathDates, _hashLogMeta, fileHashTuples);
@@ -132,10 +127,11 @@ export async function convertCsvLogs() {
   await CsvLogMeta.initConvertedLogsDir();
 
   startMs = Date.now();
-  await convertCsvLogsByDate(csvPathDates, _hashLogMeta);
-  endMs = Date.now();
 
-  await CsvLogMeta.writeLastId(recordIdCounter);
+  // await convertCsvLogsByDate(csvPathDates, _hashLogMeta);
+  await _convertCsvLogsByDate(csvPathDates, _hashLogMeta);
+
+  endMs = Date.now();
 
   deltaMs = endMs - startMs;
   deltaSeconds = deltaMs / 1000;
@@ -148,6 +144,22 @@ export async function convertCsvLogs() {
   process.stdout.write('\n');
 }
 
+async function _convertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _HashLogMetaValue[]) {
+  let convertResults: CsvConvertResult[];
+  convertResults = [];
+  for(let i = 0; i < csvPathDates.length; ++i) {
+    let currPathDate: CsvPathDate;
+    currPathDate = csvPathDates[i];
+    const convertResult = await converCsvLog(currPathDate);
+    convertResults.push(convertResult);
+    printProgress(i + 1, csvPathDates.length);
+  }
+  const recordTotal = convertResults.reduce((acc, curr) => {
+    return acc + curr.recordCount;
+  }, 0);
+  console.log(`\nrecords: ${recordTotal.toLocaleString()}`);
+}
+
 async function convertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _HashLogMetaValue[]) {
   let totalSize: number, totalSizeMb: number,
     byteTotal: number, byteConvertedTotal: number,
@@ -156,6 +168,7 @@ async function convertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _H
   let totalFileCount: number, completeCount: number;
   let fileHashTuples: [ string, string ][];
   let headers: string[];
+  let recordIdCounter: number;
   headers = [ 'id', 'time_stamp', 'uri', 'ping_ms' ];
 
   fileHashTuples = [];
@@ -168,6 +181,7 @@ async function convertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _H
   recordCount = 0;
   byteTotal = 0;
   byteConvertedTotal = 0;
+  await initializeRecordId();
 
   csvPathDates = csvPathDates.filter(csvPathDate => {
     return csvPathDate.csvPaths.length > 0;
@@ -200,7 +214,6 @@ async function convertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _H
         let scanLogPromise: Promise<void>;
 
         scanLogPromise = scanLog(currCsvPath, (record, recordIdx) => {
-          let recordWithId: any[];
           if((recordIdx === 0) && (headers === undefined)) {
             if(
               headers[0] !== 'time_stamp'
@@ -213,8 +226,7 @@ async function convertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _H
             recordCount++;
           }
           if(recordIdx !== 0) {
-            recordWithId = [ getRecordId(), ...record ];
-            dateRecords.push(recordWithId);
+            dateRecords.push(record);
           }
         }).then(() => {
           return getFileHash(currCsvPath).then(hash => {
@@ -236,10 +248,15 @@ async function convertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _H
 
     dateRecords.reverse();
 
+    recordIdCounter = 0;
+
     while(dateRecords.length) {
       let dateRecord: any[], convertedRecord: any[];
+      let recordId: number, recordWithId: any[];
       dateRecord = dateRecords.pop();
-      convertedRecord = convertRecord(dateRecord);
+      recordId = ++recordIdCounter;
+      recordWithId = [ recordId, ...dateRecord ];
+      convertedRecord = convertRecord(recordWithId);
       byteTotal += dateRecord.join(',').length;
       byteConvertedTotal += convertedRecord.join(',').length;
       convertedDateRecords.push(convertedRecord);
@@ -261,6 +278,7 @@ async function convertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _H
       headers,
       ...convertedDateRecords,
     ]);
+    // await CsvLogMeta.writeLastId(recordIdCounter);
 
     byteTotal += dayByteTotal;
     byteConvertedTotal += dayByteConvertedTotal;
@@ -286,12 +304,13 @@ async function convertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _H
     }
   });
 
-  await CsvLogMeta._writeHashMeta(hashLogMeta);
+  // await CsvLogMeta._writeHashMeta(hashLogMeta);
 
   mbTotal = byteTotal / 1024 / 1024;
   mbConvertedTotal = byteConvertedTotal / 1024 / 1024;
   process.stdout.write('\n');
   process.stdout.write(`\nrecords: ${recordCount.toLocaleString()}`);
+  process.stdout.write(`\nrecordIdCounter: ${recordIdCounter.toLocaleString()}`);
   process.stdout.write('\n');
   process.stdout.write(`original: ${mbTotal.toFixed(2)}mb`);
   process.stdout.write('\n');

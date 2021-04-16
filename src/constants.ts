@@ -2,6 +2,9 @@
 import path from 'path';
 
 export const BASE_DIR = path.resolve(__dirname, '../..');
+export const HOME_DIR = path.resolve(process.env.HOME);
+
+export const PING_MONITOR_DIR = path.join(HOME_DIR, 'repos', 'ping-monitor');
 
 const METADATA_DIR_NAME = 'log-meta';
 export const METADATA_DIR_PATH = path.join(BASE_DIR, METADATA_DIR_NAME);
@@ -11,9 +14,10 @@ export const METADATA_LAST_ID_FILE_NAME = 'last-id';
 
 const CONVERTED_CSV_LOGS_DIR_NAME = 'converted-csv-logs';
 export const CONVERTED_CSV_LOGS_DIR_PATH = path.join(BASE_DIR, CONVERTED_CSV_LOGS_DIR_NAME);
-///Users/tylor/repos/ping-monitor
-export const CSV_PING_LOG_DIR = '/Users/tylor/repos/ping-monitor/csv-logs';
-export const CSV_COALESCE_LOG_DIR = '/Users/tylor/repos/ping-monitor/csv-logs-coalesced';
+// export const CSV_PING_LOG_DIR = '/Users/tylor/repos/ping-monitor/csv-logs';
+// export const CSV_COALESCE_LOG_DIR = '/Users/tylor/repos/ping-monitor/csv-logs-coalesced';
+export const CSV_PING_LOG_DIR = path.join(PING_MONITOR_DIR, 'csv-logs');
+export const CSV_COALESCE_LOG_DIR = path.join(PING_MONITOR_DIR, 'csv-logs-coalesced');
 
 export const PERIOD_STAT_PATH = path.join(BASE_DIR, 'stat.txt');
 

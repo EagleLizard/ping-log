@@ -16,6 +16,7 @@ import { scanLog } from '../lib/csv-read';
 import { converCsvLog, CsvConvertResult } from './convert-csv-log';
 import { getRecordId, initializeRecordId } from './record-id';
 import { initRecordDb, incrementRecordId } from '../db/record-id-db';
+import { initializePool, destroyWorkers, queueConvertCsv } from '../csv-parse/worker-pool';
 
 const NUM_CPUS = os.cpus().length;
 const CSV_CHUNK_SIZE = Math.round(
@@ -91,7 +92,7 @@ export async function convertCsvLogs() {
     csvPathDates.splice(todayCsvPathDateIdx, 1);
   }
 
-  csvPathDates = csvPathDates.slice(-3);
+  csvPathDates = csvPathDates.slice(-8);
 
   _hashLogMeta = await CsvLogMeta.getLogHashMeta();
 
@@ -115,6 +116,7 @@ export async function convertCsvLogs() {
     return acc + curr.csvPaths.length;
   }, 0);
   console.log(`Total filePaths: ${csvPathFileSum}`);
+  console.log(`Total pathDates: ${csvPathDates.length}`);
   console.log(csvPathDates.map(csvPathDate => csvPathDate.dateStr).join(', '));
 
   fileHashTuples = await getHashes(csvPathDates, _hashLogMeta);
@@ -129,7 +131,9 @@ export async function convertCsvLogs() {
   startMs = Date.now();
 
   // await convertCsvLogsByDate(csvPathDates, _hashLogMeta);
-  await _convertCsvLogsByDate(csvPathDates, _hashLogMeta);
+  // await _convertCsvLogsByDate(csvPathDates, _hashLogMeta);
+
+  await concurrentConvertCsvLogsByDate(csvPathDates);
 
   endMs = Date.now();
 
@@ -142,6 +146,25 @@ export async function convertCsvLogs() {
     console.log(`Scan took ${deltaMinutes.toFixed(2)} minutess`);
   }
   process.stdout.write('\n');
+}
+
+async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[]) {
+  let doneCount: number, csvConvertResults: CsvConvertResult[], recordCount: number;
+  doneCount = 0;
+  await initializePool();
+  const convertJobPromises = csvPathDates.map(csvPathDate => {
+    return queueConvertCsv(csvPathDate).then(convertResult => {
+      doneCount++;
+      printProgress(doneCount, csvPathDates.length);
+      return convertResult;
+    });
+  });
+  csvConvertResults = await Promise.all(convertJobPromises);
+  recordCount = csvConvertResults.reduce((acc, curr) => {
+    return acc + curr.recordCount;
+  }, 0);
+  console.log(`\nrecordCount: ${recordCount.toLocaleString()}`);
+  await destroyWorkers();
 }
 
 async function _convertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _HashLogMetaValue[]) {

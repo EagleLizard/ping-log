@@ -7,16 +7,16 @@ import os from 'os';
 
 import { sleep } from '../lib/sleep';
 import { CsvLogParseResult, parseCsvLog } from './parse-csv-log';
-import { CsvConvertResult } from '../csv-logs/convert-csv-log';
+import { converCsvLog, CsvConvertResult } from '../csv-logs/convert-csv-log';
 import { CsvPathDate } from '../lib/date-time-util';
 
 const NUM_CPUS = os.cpus().length;
 const NUM_WORKERS = Math.round(
   NUM_CPUS
+  // NUM_CPUS - 1
   // NUM_CPUS * 2
   // NUM_CPUS * 4
   // NUM_CPUS * 8
-  // NUM_CPUS - 1
   // NUM_CPUS - 2
   // NUM_CPUS / 2
 );
@@ -48,14 +48,14 @@ if(!isMainThread) {
   initWorkerThread();
 }
 
-(async () => {
-  try {
-    // await initializePool();
-  } catch(e) {
-    console.error(e);
-    throw e;
-  }
-})();
+// (async () => {
+//   try {
+//     // await initializePool();
+//   } catch(e) {
+//     console.error(e);
+//     throw e;
+//   }
+// })();
 
 export function queueParseCsv(csvPath: string) {
   return new Promise<CsvLogParseResult>((resolve, reject) => {
@@ -162,12 +162,19 @@ async function initMainThread() {
             foundParseJob[1](msg?.data?.parseResult);
           }
           break;
-        // case MESSAGE_TYPES.CONVERT_CSV_COMPLETE:
-        //   let foundConvertJobIdx: number;
-        //   let foundConvertJob: [ CsvPathDate, (convertResult: CsvConvertResult) => void ];
-          // foundConvertJobIdx = runningConvertJobs.findIndex((convertJob) => {
-          //   return convertJob[0].
-          // });
+        case MESSAGE_TYPES.CONVERT_CSV_COMPLETE:
+          let foundConvertJobIdx: number;
+          let foundConvertJob: [ CsvPathDate, (convertResult: CsvConvertResult) => void ];
+          foundConvertJobIdx = runningConvertJobs.findIndex((convertJob) => {
+            return convertJob[0].dateStr === msg?.data?.csvPathDate?.dateStr;
+          });
+          if(foundConvertJobIdx !== -1) {
+            foundConvertJob = runningConvertJobs[foundConvertJobIdx];
+            runningConvertJobs.splice(foundConvertJobIdx, 1);
+            availableWorkers.push(worker);
+            foundConvertJob[1](msg?.data?.convertResult);
+          }
+          break;
       }
     });
   });
@@ -178,6 +185,7 @@ async function initMainThread() {
 function checkQueueLoop() {
   setTimeout(() => {
     let availableWorker: Worker, parseJob: [ string, (parseResult: CsvLogParseResult) => void ];
+    let convertJob: [ CsvPathDate, (convertResult: CsvConvertResult) => void ];
     while((parseQueue.length > 0) && (availableWorkers.length > 0)) {
       availableWorker = availableWorkers.pop();
       parseJob = parseQueue.shift();
@@ -186,6 +194,17 @@ function checkQueueLoop() {
         messageType: MESSAGE_TYPES.PARSE_CSV,
         data: {
           csvPath: parseJob[0],
+        },
+      });
+    }
+    while((convertQueue.length > 0) && (availableWorkers.length > 0)) {
+      availableWorker = availableWorkers.pop();
+      convertJob = convertQueue.shift();
+      runningConvertJobs.push(convertJob);
+      availableWorker.postMessage({
+        messageType: MESSAGE_TYPES.CONVERT_CSV,
+        data: {
+          csvPathDate: convertJob[0],
         },
       });
     }
@@ -217,6 +236,24 @@ function initWorkerThread() {
                   parseResult,
                   csvPath,
                 },
+              });
+            });
+        }
+        break;
+      case MESSAGE_TYPES.CONVERT_CSV:
+        const csvPathDate = (msg?.data?.csvPathDate as CsvPathDate);
+        if(csvPathDate === undefined) {
+          console.error('Error, malformed message sent to worker:');
+          console.error(msg);
+        } else {
+          converCsvLog(csvPathDate)
+            .then(convertResult => {
+              parentPort.postMessage({
+                messageType: MESSAGE_TYPES.CONVERT_CSV_COMPLETE,
+                data: {
+                  csvPathDate,
+                  convertResult,
+                }
               });
             });
         }

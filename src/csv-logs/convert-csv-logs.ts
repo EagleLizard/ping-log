@@ -13,7 +13,7 @@ import { getFileHash, getHashes } from './hash-log';
 import { CsvLogMeta, _HashLogMetaValue } from './csv-log-meta';
 import { CsvWriter, writeCsv } from '../lib/csv-writer';
 import { scanLog } from '../lib/csv-read';
-import { converCsvLog, CsvConvertResult } from './convert-csv-log';
+import { convertCsvPathDate, CsvConvertResult } from './convert-csv-path-date';
 import { getRecordId, initializeRecordId } from './record-id';
 import { initRecordDb, incrementRecordId } from '../db/record-id-db';
 import { initializePool, destroyWorkers, queueConvertCsv } from '../csv-parse/worker-pool';
@@ -37,7 +37,6 @@ const PER_CHUNK_SLEEP_MS = 8;
 const PER_DATE_SLEEP_MS = 32;
 
 const WEEK_AGO_MS = Date.now() - (1000 * 60 * 60 * 24 * 7);
-const YEAR_AGO_MS = Date.now() - (1000 * 60 * 60 * 24 * 365);
 
 export async function convertCsvLogs() {
   // console.log(`NUM_CPUS: ${NUM_CPUS}`);
@@ -92,7 +91,7 @@ export async function convertCsvLogs() {
     csvPathDates.splice(todayCsvPathDateIdx, 1);
   }
 
-  csvPathDates = csvPathDates.slice(-8);
+  csvPathDates = csvPathDates.slice(-2);
 
   _hashLogMeta = await CsvLogMeta.getLogHashMeta();
 
@@ -173,7 +172,7 @@ async function _convertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _
   for(let i = 0; i < csvPathDates.length; ++i) {
     let currPathDate: CsvPathDate;
     currPathDate = csvPathDates[i];
-    const convertResult = await converCsvLog(currPathDate);
+    const convertResult = await convertCsvPathDate(currPathDate);
     convertResults.push(convertResult);
     printProgress(i + 1, csvPathDates.length);
   }

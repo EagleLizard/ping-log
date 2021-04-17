@@ -31,7 +31,7 @@ const CSV_CHUNK_SIZE = Math.round(
   // NUM_CPUS / 4
 );
 
-export async function converCsvLog(csvPathDate: CsvPathDate): Promise<CsvConvertResult> {
+export async function convertCsvPathDate(csvPathDate: CsvPathDate): Promise<CsvConvertResult> {
   let csvPaths: string[], dateRecords: any[][], convertedDateRecords: any[][];
   let csvConvertFileName: string, csvConvertFilePath: string;
   let fileHashTuples: [ string, string ][];

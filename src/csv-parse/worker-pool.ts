@@ -7,13 +7,13 @@ import os from 'os';
 
 import { sleep } from '../lib/sleep';
 import { CsvLogParseResult, parseCsvLog } from './parse-csv-log';
-import { converCsvLog, CsvConvertResult } from '../csv-logs/convert-csv-log';
+import { convertCsvPathDate, CsvConvertResult } from '../csv-logs/convert-csv-path-date';
 import { CsvPathDate } from '../lib/date-time-util';
 
 const NUM_CPUS = os.cpus().length;
 const NUM_WORKERS = Math.round(
-  NUM_CPUS
-  // NUM_CPUS - 1
+  // NUM_CPUS
+  NUM_CPUS - 1
   // NUM_CPUS * 2
   // NUM_CPUS * 4
   // NUM_CPUS * 8
@@ -246,7 +246,7 @@ function initWorkerThread() {
           console.error('Error, malformed message sent to worker:');
           console.error(msg);
         } else {
-          converCsvLog(csvPathDate)
+          convertCsvPathDate(csvPathDate)
             .then(convertResult => {
               parentPort.postMessage({
                 messageType: MESSAGE_TYPES.CONVERT_CSV_COMPLETE,

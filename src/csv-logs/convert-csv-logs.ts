@@ -14,9 +14,8 @@ import { CsvLogMeta, _HashLogMetaValue } from './csv-log-meta';
 import { CsvWriter, writeCsv } from '../lib/csv-writer';
 import { scanLog } from '../lib/csv-read';
 import { convertCsvPathDate, CsvConvertResult } from './convert-csv-path-date';
-import { getRecordId, initializeRecordId } from './record-id';
-import { initRecordDb, incrementRecordId } from '../db/record-id-db';
-import { initializePool, destroyWorkers, queueConvertCsv } from '../csv-parse/worker-pool';
+import { convertCsvLogFile, CsvLogConvertResult } from './convert-csv-log';
+import { initializePool, destroyWorkers, queueConvertCsv, queueConvertCsvLog } from '../csv-parse/worker-pool';
 
 const NUM_CPUS = os.cpus().length;
 const CSV_CHUNK_SIZE = Math.round(
@@ -51,8 +50,6 @@ export async function convertCsvLogs() {
     deltaMinutes: number;
   let _hashLogMeta: _HashLogMetaValue[];
   let fileHashTuples: [ string, string ][];
-
-  await initRecordDb();
 
   csvPaths = await listDir(CSV_PING_LOG_DIR);
 
@@ -91,7 +88,7 @@ export async function convertCsvLogs() {
     csvPathDates.splice(todayCsvPathDateIdx, 1);
   }
 
-  csvPathDates = csvPathDates.slice(-2);
+  csvPathDates = csvPathDates.slice(-6);
 
   _hashLogMeta = await CsvLogMeta.getLogHashMeta();
 
@@ -131,8 +128,8 @@ export async function convertCsvLogs() {
 
   // await convertCsvLogsByDate(csvPathDates, _hashLogMeta);
   // await _convertCsvLogsByDate(csvPathDates, _hashLogMeta);
-
-  await concurrentConvertCsvLogsByDate(csvPathDates);
+  await concurrentConvertCsvLogsByDate(csvPathDates, _hashLogMeta);
+  // await concurrentConvertPathDates(csvPathDates, _hashLogMeta);
 
   endMs = Date.now();
 
@@ -147,23 +144,146 @@ export async function convertCsvLogs() {
   process.stdout.write('\n');
 }
 
-async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[]) {
-  let doneCount: number, csvConvertResults: CsvConvertResult[], recordCount: number;
+async function concurrentConvertPathDates(csvPathDates: CsvPathDate[], hashLogMeta: _HashLogMetaValue[]) {
+  let convertJobPromises: Promise<void>[];
+  let doneCount: number, recordCount: number;
+  let fileHashTuples: [ string, string ][];
+
+  fileHashTuples = [];
+  recordCount = 0;
   doneCount = 0;
+  convertJobPromises = [];
   await initializePool();
-  const convertJobPromises = csvPathDates.map(csvPathDate => {
-    return queueConvertCsv(csvPathDate).then(convertResult => {
-      doneCount++;
-      printProgress(doneCount, csvPathDates.length);
-      return convertResult;
-    });
-  });
-  csvConvertResults = await Promise.all(convertJobPromises);
-  recordCount = csvConvertResults.reduce((acc, curr) => {
-    return acc + curr.recordCount;
+  for(let i = 0, currPathDate: CsvPathDate; currPathDate = csvPathDates[i], i < csvPathDates.length; ++i) {
+    let convertJobPromise: Promise<void>;
+    convertJobPromise = queueConvertCsv(currPathDate)
+      .then(convertResult => {
+        fileHashTuples.push(...convertResult.fileHashTuples);
+        recordCount += convertResult.recordCount;
+        doneCount++;
+        printProgress(doneCount, csvPathDates.length);
+      });
+    convertJobPromises.push(convertJobPromise);
+  }
+  await Promise.all(convertJobPromises);
+  await destroyWorkers();
+  console.log(`\nrecords: ${recordCount.toLocaleString()}\n`);
+}
+
+async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _HashLogMetaValue[]) {
+  let doneCount: number, csvConvertResults: CsvConvertResult[], recordCount: number;
+  let totalFiles: number, fileDoneCount: number;
+  let fileHashTuples: [ string, string ][];
+
+  fileHashTuples = [];
+  // doneCount = 0;
+  recordCount = 0;
+  fileDoneCount = 0;
+  totalFiles = csvPathDates.reduce((acc, curr) => {
+    return acc + curr.csvPaths.length;
   }, 0);
+  await initializePool();
+  for(let i = 0, csvPathDate: CsvPathDate; csvPathDate = csvPathDates[i], i < csvPathDates.length; ++i) {
+    let csvConvertFileName: string, csvConvertFilePath: string;
+    let filePaths: string[];
+    let convertLogJobPromises: Promise<void>[];
+    let headers: any[], records: any[][], recordIdCounter: number;
+    let convertedRecords: any[][];
+    headers = [ 'id', 'time_stamp', 'uri', 'ping_ms' ];
+
+    csvConvertFileName = `${csvPathDate.dateStr}.csv`;
+    csvConvertFilePath = `${CONVERTED_CSV_LOGS_DIR_PATH}/${csvConvertFileName}`;
+
+    filePaths = csvPathDate.csvPaths;
+    records = [];
+    convertLogJobPromises = [];
+    for(let k = 0, filePath: string; filePath = filePaths[k], k < filePaths.length; ++k) {
+      let convertLogPromise: Promise<void>;
+      convertLogPromise = queueConvertCsvLog(filePath)
+        .then(convertLogResult => {
+          fileHashTuples.push([
+            convertLogResult.filePath,
+            convertLogResult.fileHash,
+          ]);
+          for(let m = 0; m < convertLogResult.records.length; ++i) {
+            records.push(convertLogResult.records[i]);
+          }
+          // while(convertLogResult.records.length) {
+          //   records.push(
+          //     convertLogResult.records.pop()
+          //   );
+          // }
+          fileDoneCount++;
+          recordCount += convertLogResult.recordCount;
+          printProgress(fileDoneCount, totalFiles);
+        });
+      convertLogJobPromises.push(convertLogPromise);
+
+    }
+    await Promise.all(convertLogJobPromises);
+    recordIdCounter = 0;
+    convertedRecords = [];
+
+    while(records.length) {
+      let recordId: number;
+      let dateRecord: any[], recordWithId: any[], convertedRecord: any[];
+      dateRecord = records.pop();
+      recordId = ++recordIdCounter;
+      recordWithId = [ recordId, ...dateRecord ];
+      convertedRecord = convertRecord(recordWithId);
+      convertedRecords.push(convertedRecord);
+    }
+    convertedRecords.sort((a, b) => {
+      let aStamp: number, bStamp: number;
+      aStamp = a[1];
+      bStamp = b[1];
+      if(aStamp > bStamp) {
+        return 1;
+      }
+      if(aStamp < bStamp) {
+        return -1;
+      }
+      return 0;
+    });
+
+    const csvWriter = new CsvWriter(csvConvertFilePath);
+    csvWriter.write(headers);
+    for(let i = 0; i < convertedRecords.length; ++i) {
+      csvWriter.write(convertedRecords[i]);
+    }
+    await sleep(1);
+    await csvWriter.end();
+
+    // await writeCsv(csvConvertFilePath, [
+    //   headers,
+    //   ...convertedRecords,
+    // ]);
+
+  }
+
+  fileHashTuples.forEach(fileHashTuple => {
+    let foundHashMetaVal: _HashLogMetaValue;
+    const key = path.parse(fileHashTuple[0]).base;
+    foundHashMetaVal = hashLogMeta.find(metaVal => {
+      return metaVal.fileKey === key;
+    });
+    if(foundHashMetaVal !== undefined) {
+      foundHashMetaVal.filePath = fileHashTuple[0];
+      foundHashMetaVal.fileHash = fileHashTuple[1];
+    } else {
+      hashLogMeta.push({
+        fileKey: key,
+        filePath: fileHashTuple[0],
+        fileHash: fileHashTuple[1],
+        timestamp: CsvLogMeta.getTimestampFromFilepath(fileHashTuple[0]).valueOf(),
+      });
+    }
+  });
+
+  // await CsvLogMeta._writeHashMeta(hashLogMeta);
   console.log(`\nrecordCount: ${recordCount.toLocaleString()}`);
   await destroyWorkers();
+  process.stdout.write('\n');
 }
 
 async function _convertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _HashLogMetaValue[]) {
@@ -203,7 +323,6 @@ async function convertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _H
   recordCount = 0;
   byteTotal = 0;
   byteConvertedTotal = 0;
-  await initializeRecordId();
 
   csvPathDates = csvPathDates.filter(csvPathDate => {
     return csvPathDate.csvPaths.length > 0;

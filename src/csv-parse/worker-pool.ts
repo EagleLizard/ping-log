@@ -9,16 +9,18 @@ import { sleep } from '../lib/sleep';
 import { CsvLogParseResult, parseCsvLog } from './parse-csv-log';
 import { convertCsvPathDate, CsvConvertResult } from '../csv-logs/convert-csv-path-date';
 import { CsvPathDate } from '../lib/date-time-util';
+import { CsvLogConvertResult, convertCsvLogFile } from '../csv-logs/convert-csv-log';
 
 const NUM_CPUS = os.cpus().length;
 const NUM_WORKERS = Math.round(
+  // 1
   // NUM_CPUS
   NUM_CPUS - 1
+  // NUM_CPUS / 2
   // NUM_CPUS * 2
   // NUM_CPUS * 4
   // NUM_CPUS * 8
   // NUM_CPUS - 2
-  // NUM_CPUS / 2
 );
 
 enum MESSAGE_TYPES {
@@ -28,14 +30,22 @@ enum MESSAGE_TYPES {
   PARSE_CSV_COMPLETE = 'parse_csv_complete',
   CONVERT_CSV = 'convert_csv',
   CONVERT_CSV_COMPLETE = 'convert_csv_complete',
+  CONVERT_CSV_LOG = 'convert_csv_log',
+  CONVERT_CSV_LOG_COMPLETE = 'convert_csv_log_complete',
 }
 
 let workers: Worker[] = [];
 let availableWorkers: Worker[] = [];
+
 let parseQueue: [ string, (parseResult: CsvLogParseResult) => void ][] = [];
 let runningParseJobs: [ string, (parseResult: CsvLogParseResult) => void ][] = [];
+
 let convertQueue: [ CsvPathDate, (convertResult: CsvConvertResult) => void ][] = [];
-let runningConvertJobs: [ CsvPathDate, (parseResult: CsvConvertResult) => void ][] = [];
+let runningConvertJobs: [ CsvPathDate, (convertResult: CsvConvertResult) => void ][] = [];
+
+let convertLogQueue: [ string, (convertLogResult: CsvLogConvertResult) => void ][] = [];
+let runningConvertLogJobs: [ string, (converLogResult: CsvLogConvertResult) => void ][] = [];
+
 let isInitialized = false;
 let areWorkersDestroyed = false;
 
@@ -75,6 +85,17 @@ export function queueConvertCsv(csvPathDate: CsvPathDate) {
     };
     convertQueue.push([
       csvPathDate,
+      resolver,
+    ]);
+  });
+}
+export function queueConvertCsvLog(csvPath: string) {
+  return new Promise<CsvLogConvertResult>((resolve, reject) => {
+    const resolver = (convertLogResult: CsvLogConvertResult) => {
+      resolve(convertLogResult);
+    };
+    convertLogQueue.push([
+      csvPath,
       resolver,
     ]);
   });
@@ -175,6 +196,19 @@ async function initMainThread() {
             foundConvertJob[1](msg?.data?.convertResult);
           }
           break;
+        case MESSAGE_TYPES.CONVERT_CSV_LOG_COMPLETE:
+          let foundConvertLogJobIdx: number;
+          let foundConvertLogJob: [ string, (convertLogResult: CsvLogConvertResult) => void ];
+          foundConvertLogJobIdx = runningConvertLogJobs.findIndex((convertLogJob) => {
+            return convertLogJob[0] === msg?.data?.filePath;
+          });
+          if(foundConvertLogJobIdx !== -1) {
+            foundConvertLogJob = runningConvertLogJobs[foundConvertLogJobIdx];
+            runningConvertLogJobs.splice(foundConvertLogJobIdx, 1);
+            availableWorkers.push(worker);
+            foundConvertLogJob[1](msg?.data?.convertLogResult);
+          }
+          break;
       }
     });
   });
@@ -186,6 +220,7 @@ function checkQueueLoop() {
   setTimeout(() => {
     let availableWorker: Worker, parseJob: [ string, (parseResult: CsvLogParseResult) => void ];
     let convertJob: [ CsvPathDate, (convertResult: CsvConvertResult) => void ];
+    let convertLogJob: [ string, (convertLogResult: CsvLogConvertResult) => void ];
     while((parseQueue.length > 0) && (availableWorkers.length > 0)) {
       availableWorker = availableWorkers.pop();
       parseJob = parseQueue.shift();
@@ -208,6 +243,18 @@ function checkQueueLoop() {
         },
       });
     }
+    while((convertLogQueue.length > 0) && (availableWorkers.length > 0)) {
+      availableWorker = availableWorkers.pop();
+      convertLogJob = convertLogQueue.shift();
+      runningConvertLogJobs.push(convertLogJob);
+      availableWorker.postMessage({
+        messageType: MESSAGE_TYPES.CONVERT_CSV_LOG,
+        data: {
+          filePath: convertLogJob[0],
+        },
+      });
+    }
+
     if(!areWorkersDestroyed) {
       checkQueueLoop();
     }
@@ -254,6 +301,24 @@ function initWorkerThread() {
                   csvPathDate,
                   convertResult,
                 }
+              });
+            });
+        }
+        break;
+      case MESSAGE_TYPES.CONVERT_CSV_LOG:
+        const filePath = (msg?.data?.filePath as string);
+        if(filePath === undefined) {
+          console.error('Error, malformed message sent to worker:');
+          console.error(msg);
+        } else {
+          convertCsvLogFile(filePath)
+            .then(convertLogResult => {
+              parentPort.postMessage({
+                messageType: MESSAGE_TYPES.CONVERT_CSV_LOG_COMPLETE,
+                data: {
+                  filePath,
+                  convertLogResult,
+                },
               });
             });
         }

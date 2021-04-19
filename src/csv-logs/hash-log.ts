@@ -8,6 +8,12 @@ import _chunk from 'lodash.chunk';
 import { CsvPathDate } from '../lib/date-time-util';
 import { printProgress } from '../print';
 import { _HashLogMetaValue } from './csv-log-meta';
+import { queueHashJob, initializePool } from '../csv-parse/worker-pool';
+
+export interface HashLogResult {
+  filePath: string;
+  fileHash: string;
+}
 
 const NUM_CPUS = os.cpus().length;
 const CSV_FILES_CHUNK_SIZE = Math.round(
@@ -76,6 +82,39 @@ export async function getHashes(csvPathDates: CsvPathDate[], hashLogMeta: _HashL
       await Promise.all(hashPromises);
     }
   }
+  endMs = Date.now();
+  deltaMs = endMs - startMs;
+  console.log(`\nHash generation took ${deltaMs}ms\n`);
+  return fileHashes;
+}
+
+export async function getHashesConcurrent(csvPathDates: CsvPathDate[], hashLogMeta: _HashLogMetaValue[]): Promise<[ string, string ][]> {
+  let fileHashes: [ string, string ][], totalPathsCount: number, pathsCompletCount: number;
+  let startMs: number, endMs: number, deltaMs: number;
+  let csvFilePaths: string[], hashJobPromises: Promise<void>[];
+  // totalPathsCount = csvPathDates.reduce((acc, curr) => {
+  //   return acc + curr.csvPaths.length;
+  // }, 0);
+  pathsCompletCount = 0;
+  fileHashes = [];
+  // hashJobPromises = [];
+  await initializePool();
+  startMs = Date.now();
+  csvFilePaths = csvPathDates.reduce((acc, curr) => {
+    return acc.concat(curr.csvPaths);
+  }, []);
+  hashJobPromises = csvFilePaths.map(csvFilePath => {
+    return queueHashJob(csvFilePath)
+      .then(hashResult => {
+        fileHashes.push([
+          hashResult.filePath,
+          hashResult.fileHash,
+        ]);
+        pathsCompletCount++;
+        printProgress(pathsCompletCount, csvFilePaths.length);
+      });
+  });
+  await Promise.all(hashJobPromises);
   endMs = Date.now();
   deltaMs = endMs - startMs;
   console.log(`\nHash generation took ${deltaMs}ms\n`);

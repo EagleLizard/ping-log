@@ -10,13 +10,14 @@ import { CsvLogParseResult, parseCsvLog } from './parse-csv-log';
 import { convertCsvPathDate, CsvConvertResult } from '../csv-logs/convert-csv-path-date';
 import { CsvPathDate } from '../lib/date-time-util';
 import { CsvLogConvertResult, convertCsvLogFile } from '../csv-logs/convert-csv-log';
+import { getFileHash, HashLogResult } from '../csv-logs/hash-log';
 
 const NUM_CPUS = os.cpus().length;
 const NUM_WORKERS = Math.round(
   // 1
-  // NUM_CPUS
   NUM_CPUS - 1
   // NUM_CPUS / 2
+  // NUM_CPUS
   // NUM_CPUS * 2
   // NUM_CPUS * 4
   // NUM_CPUS * 8
@@ -26,6 +27,8 @@ const NUM_WORKERS = Math.round(
 enum MESSAGE_TYPES {
   ACK = 'ack',
   EXIT = 'exit',
+  HASH_FILE = 'hash_file',
+  HASH_FILE_COMPLETE = 'hash_file_complete',
   PARSE_CSV = 'parse_csv',
   PARSE_CSV_COMPLETE = 'parse_csv_complete',
   CONVERT_CSV = 'convert_csv',
@@ -36,6 +39,9 @@ enum MESSAGE_TYPES {
 
 let workers: Worker[] = [];
 let availableWorkers: Worker[] = [];
+
+let hashQueue: [ string, (hashResult: HashLogResult) => void ][] = [];
+let runningHashJobs: [ string, (hashResult: HashLogResult) => void ][] = [];
 
 let parseQueue: [ string, (parseResult: CsvLogParseResult) => void ][] = [];
 let runningParseJobs: [ string, (parseResult: CsvLogParseResult) => void ][] = [];
@@ -66,6 +72,18 @@ if(!isMainThread) {
 //     throw e;
 //   }
 // })();
+
+export function queueHashJob(filePath: string) {
+  return new Promise<HashLogResult>((resolve, reject) => {
+    const resolver = (hashResult: HashLogResult) => {
+      resolve(hashResult);
+    };
+    hashQueue.push([
+      filePath,
+      resolver,
+    ]);
+  });
+}
 
 export function queueParseCsv(csvPath: string) {
   return new Promise<CsvLogParseResult>((resolve, reject) => {
@@ -113,6 +131,9 @@ export async function initializePool() {
 
 export async function destroyWorkers() {
   let exitPromises: Promise<void>[];
+  if(!isInitialized || areWorkersDestroyed) {
+    return;
+  }
   exitPromises = workers.map(worker => {
     return new Promise<void>((resolve, reject) => {
       worker.on('exit', err => {
@@ -209,6 +230,23 @@ async function initMainThread() {
             foundConvertLogJob[1](msg?.data?.convertLogResult);
           }
           break;
+        case MESSAGE_TYPES.HASH_FILE_COMPLETE:
+          let foundHashJobIdx: number;
+          let foundHashJob: [ string, (hashResult: HashLogResult) => void ];
+          foundHashJobIdx = runningHashJobs.findIndex((hashLogJob) => {
+            return hashLogJob[0] === msg?.data?.filePath;
+          });
+          if(foundHashJobIdx !== -1) {
+            foundHashJob = runningHashJobs[foundHashJobIdx];
+            runningHashJobs.splice(foundHashJobIdx, 1);
+            availableWorkers.push(worker);
+            foundHashJob[1]({
+              filePath: msg?.data?.filePath,
+              fileHash: msg?.data?.fileHash,
+            });
+          }
+
+          break;
       }
     });
   });
@@ -221,6 +259,7 @@ function checkQueueLoop() {
     let availableWorker: Worker, parseJob: [ string, (parseResult: CsvLogParseResult) => void ];
     let convertJob: [ CsvPathDate, (convertResult: CsvConvertResult) => void ];
     let convertLogJob: [ string, (convertLogResult: CsvLogConvertResult) => void ];
+    let hashLogJob: [ string, (hashResult: HashLogResult) => void ];
     while((parseQueue.length > 0) && (availableWorkers.length > 0)) {
       availableWorker = availableWorkers.pop();
       parseJob = parseQueue.shift();
@@ -251,6 +290,18 @@ function checkQueueLoop() {
         messageType: MESSAGE_TYPES.CONVERT_CSV_LOG,
         data: {
           filePath: convertLogJob[0],
+        },
+      });
+    }
+
+    while((hashQueue.length > 0) && (availableWorkers.length > 0)) {
+      availableWorker = availableWorkers.pop();
+      hashLogJob = hashQueue.shift();
+      runningHashJobs.push(hashLogJob);
+      availableWorker.postMessage({
+        messageType: MESSAGE_TYPES.HASH_FILE,
+        data: {
+          filePath: hashLogJob[0],
         },
       });
     }
@@ -318,6 +369,24 @@ function initWorkerThread() {
                 data: {
                   filePath,
                   convertLogResult,
+                },
+              });
+            });
+        }
+        break;
+      case MESSAGE_TYPES.HASH_FILE:
+        const hashFilePath = (msg?.data?.filePath as string);
+        if(hashFilePath === undefined) {
+          console.error('Error, malformed message sent to worker:');
+          console.error(msg);
+        } else {
+          getFileHash(hashFilePath)
+            .then(fileHash => {
+              parentPort.postMessage({
+                messageType: MESSAGE_TYPES.HASH_FILE_COMPLETE,
+                data: {
+                  filePath: hashFilePath,
+                  fileHash,
                 },
               });
             });

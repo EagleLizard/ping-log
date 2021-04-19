@@ -9,7 +9,7 @@ import { listDir } from '../lib/files';
 import { printProgress } from '../print';
 import { sleep } from '../lib/sleep';
 import { getCsvDateMap, parseCsvLogFileDate, CsvPathDate } from '../lib/date-time-util';
-import { getFileHash, getHashes } from './hash-log';
+import { getFileHash, getHashes, getHashesConcurrent } from './hash-log';
 import { CsvLogMeta, _HashLogMetaValue } from './csv-log-meta';
 import { CsvWriter, writeCsv } from '../lib/csv-writer';
 import { scanLog } from '../lib/csv-read';
@@ -88,7 +88,7 @@ export async function convertCsvLogs() {
     csvPathDates.splice(todayCsvPathDateIdx, 1);
   }
 
-  csvPathDates = csvPathDates.slice(-6);
+  csvPathDates = csvPathDates.slice(-4);
 
   _hashLogMeta = await CsvLogMeta.getLogHashMeta();
 
@@ -115,7 +115,8 @@ export async function convertCsvLogs() {
   console.log(`Total pathDates: ${csvPathDates.length}`);
   console.log(csvPathDates.map(csvPathDate => csvPathDate.dateStr).join(', '));
 
-  fileHashTuples = await getHashes(csvPathDates, _hashLogMeta);
+  // fileHashTuples = await getHashes(csvPathDates, _hashLogMeta);
+  fileHashTuples = await getHashesConcurrent(csvPathDates, _hashLogMeta);
   csvPathDates = CsvLogMeta.filterHashedCsvPathDates(csvPathDates, _hashLogMeta, fileHashTuples);
   const filteredCsvFileSum = csvPathDates.reduce((acc, curr) => {
     return acc + curr.csvPaths.length;
@@ -142,6 +143,7 @@ export async function convertCsvLogs() {
     console.log(`Scan took ${deltaMinutes.toFixed(2)} minutess`);
   }
   process.stdout.write('\n');
+  await destroyWorkers();
 }
 
 async function concurrentConvertPathDates(csvPathDates: CsvPathDate[], hashLogMeta: _HashLogMetaValue[]) {
@@ -171,9 +173,11 @@ async function concurrentConvertPathDates(csvPathDates: CsvPathDate[], hashLogMe
 }
 
 async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _HashLogMetaValue[]) {
-  let doneCount: number, csvConvertResults: CsvConvertResult[], recordCount: number;
+  let recordCount: number, writeTimesMs: number[], writeStartMs: number, writeEndMs: number;
   let totalFiles: number, fileDoneCount: number;
   let fileHashTuples: [ string, string ][];
+
+  writeTimesMs = [];
 
   fileHashTuples = [];
   // doneCount = 0;
@@ -205,8 +209,8 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
             convertLogResult.filePath,
             convertLogResult.fileHash,
           ]);
-          for(let m = 0; m < convertLogResult.records.length; ++i) {
-            records.push(convertLogResult.records[i]);
+          for(let m = 0; m < convertLogResult.records.length; ++m) {
+            records.push(convertLogResult.records[m]);
           }
           // while(convertLogResult.records.length) {
           //   records.push(
@@ -222,17 +226,22 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
     }
     await Promise.all(convertLogJobPromises);
     recordIdCounter = 0;
-    convertedRecords = [];
-
-    while(records.length) {
-      let recordId: number;
-      let dateRecord: any[], recordWithId: any[], convertedRecord: any[];
-      dateRecord = records.pop();
-      recordId = ++recordIdCounter;
-      recordWithId = [ recordId, ...dateRecord ];
-      convertedRecord = convertRecord(recordWithId);
-      convertedRecords.push(convertedRecord);
+    convertedRecords = records;
+    for(let k = 0; k < convertedRecords.length; ++k) {
+      let recordId: number, recordWithId: any[], convertedRecord: any[];
+      recordId = recordIdCounter++;
+      convertedRecord = convertRecord([ recordId, ...convertedRecords[k] ]);
+      convertedRecords[k] = convertedRecord;
     }
+    // while(records.length) {
+    //   let recordId: number;
+    //   let dateRecord: any[], recordWithId: any[], convertedRecord: any[];
+    //   dateRecord = records.pop();
+    //   recordId = ++recordIdCounter;
+    //   recordWithId = [ recordId, ...dateRecord ];
+    //   convertedRecord = convertRecord(recordWithId);
+    //   convertedRecords.push(convertedRecord);
+    // }
     convertedRecords.sort((a, b) => {
       let aStamp: number, bStamp: number;
       aStamp = a[1];
@@ -245,19 +254,25 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
       }
       return 0;
     });
+    writeStartMs = Date.now();
+    /* ---- */
 
-    const csvWriter = new CsvWriter(csvConvertFilePath);
-    csvWriter.write(headers);
-    for(let i = 0; i < convertedRecords.length; ++i) {
-      csvWriter.write(convertedRecords[i]);
-    }
-    await sleep(1);
-    await csvWriter.end();
+    // const csvWriter = new CsvWriter(csvConvertFilePath);
+    // csvWriter.write(headers);
+    // for(let i = 0; i < convertedRecords.length; ++i) {
+    //   csvWriter.write(convertedRecords[i]);
+    // }
+    // await sleep(1);
+    // await csvWriter.end();
 
-    // await writeCsv(csvConvertFilePath, [
-    //   headers,
-    //   ...convertedRecords,
-    // ]);
+    await writeCsv(csvConvertFilePath, [
+      headers,
+      ...convertedRecords,
+    ]);
+
+    /* ---- */
+    writeEndMs = Date.now();
+    writeTimesMs.push(writeEndMs - writeStartMs);
 
   }
 
@@ -281,8 +296,16 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
   });
 
   // await CsvLogMeta._writeHashMeta(hashLogMeta);
-  console.log(`\nrecordCount: ${recordCount.toLocaleString()}`);
+
   await destroyWorkers();
+  console.log(`\nrecordCount: ${recordCount.toLocaleString()}`);
+  const writeMsTotal = writeTimesMs.reduce((acc, curr) => {
+    return acc + curr;
+  }, 0);
+  const writeMsAvg = writeMsTotal / writeTimesMs.length;
+  console.log(writeTimesMs);
+  console.log(`writeMs total: ${writeMsTotal.toLocaleString()}ms`);
+  console.log(`writeMs avg: ${(+(writeMsAvg.toFixed(1))).toLocaleString()}ms`);
   process.stdout.write('\n');
 }
 

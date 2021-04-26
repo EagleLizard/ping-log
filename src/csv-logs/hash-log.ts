@@ -9,6 +9,7 @@ import { CsvPathDate } from '../lib/date-time-util';
 import { printProgress } from '../print';
 import { _HashLogMetaValue } from './csv-log-meta';
 import { queueHashJob, initializePool } from '../csv-parse/worker-pool';
+import { sleep } from '../lib/sleep';
 
 export interface HashLogResult {
   filePath: string;
@@ -112,7 +113,8 @@ export async function getHashesConcurrent(csvPathDates: CsvPathDate[], hashLogMe
         ]);
         pathsCompletCount++;
         printProgress(pathsCompletCount, csvFilePaths.length);
-      });
+      })
+      .then(() => sleep(10));
   });
   await Promise.all(hashJobPromises);
   endMs = Date.now();

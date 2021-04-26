@@ -11,12 +11,16 @@ import { convertCsvPathDate, CsvConvertResult } from '../csv-logs/convert-csv-pa
 import { CsvPathDate } from '../lib/date-time-util';
 import { CsvLogConvertResult, convertCsvLogFile } from '../csv-logs/convert-csv-log';
 import { getFileHash, HashLogResult } from '../csv-logs/hash-log';
+import { writeCsv } from '../lib/csv-writer';
 
 const NUM_CPUS = os.cpus().length;
 const NUM_WORKERS = Math.round(
   // 1
-  NUM_CPUS - 1
-  // NUM_CPUS / 2
+  // NUM_CPUS - 1
+  // NUM_CPUS / Math.LOG2E
+  // NUM_CPUS / Math.E
+  NUM_CPUS / 2
+  // NUM_CPUS / 4
   // NUM_CPUS
   // NUM_CPUS * 2
   // NUM_CPUS * 4
@@ -35,6 +39,8 @@ enum MESSAGE_TYPES {
   CONVERT_CSV_COMPLETE = 'convert_csv_complete',
   CONVERT_CSV_LOG = 'convert_csv_log',
   CONVERT_CSV_LOG_COMPLETE = 'convert_csv_log_complete',
+  CSV_WRITE = 'csv_write',
+  CSV_WRITE_COMPLETE = 'csv_write_complete'
 }
 
 let workers: Worker[] = [];
@@ -51,6 +57,9 @@ let runningConvertJobs: [ CsvPathDate, (convertResult: CsvConvertResult) => void
 
 let convertLogQueue: [ string, (convertLogResult: CsvLogConvertResult) => void ][] = [];
 let runningConvertLogJobs: [ string, (converLogResult: CsvLogConvertResult) => void ][] = [];
+
+let csvWriteQueue: [ string, any[][], (err?:any) => void ][] = [];
+let runningCsvWriteJobs: [ string, any[][], (err?:any) => void ][] = [];
 
 let isInitialized = false;
 let areWorkersDestroyed = false;
@@ -114,6 +123,18 @@ export function queueConvertCsvLog(csvPath: string) {
     };
     convertLogQueue.push([
       csvPath,
+      resolver,
+    ]);
+  });
+}
+export function queueCsvWriteJob(targetCsvPath: string, rows: any[][]) {
+  return new Promise<any>((resolve, reject) => {
+    const resolver = (err?:any) => {
+      resolve(err);
+    };
+    csvWriteQueue.push([
+      targetCsvPath,
+      rows,
       resolver,
     ]);
   });
@@ -245,8 +266,19 @@ async function initMainThread() {
               fileHash: msg?.data?.fileHash,
             });
           }
-
           break;
+        case MESSAGE_TYPES.CSV_WRITE_COMPLETE:
+          let foundCsvWriteJobIdx: number;
+          let foundCsvWriteJob: [ string, any[][], () => void ];
+          foundCsvWriteJobIdx = runningCsvWriteJobs.findIndex(csvWriteJob => {
+            return csvWriteJob[0] === msg?.data?.targetCsvPath;
+          });
+          if(foundCsvWriteJobIdx !== -1) {
+            foundCsvWriteJob = runningCsvWriteJobs[foundCsvWriteJobIdx];
+            runningCsvWriteJobs.splice(foundCsvWriteJobIdx, 1);
+            availableWorkers.push(worker);
+            foundCsvWriteJob[2]();
+          }
       }
     });
   });
@@ -260,6 +292,7 @@ function checkQueueLoop() {
     let convertJob: [ CsvPathDate, (convertResult: CsvConvertResult) => void ];
     let convertLogJob: [ string, (convertLogResult: CsvLogConvertResult) => void ];
     let hashLogJob: [ string, (hashResult: HashLogResult) => void ];
+    let csvWriteJob: [ string, any[][], (err?: any) => void];
     while((parseQueue.length > 0) && (availableWorkers.length > 0)) {
       availableWorker = availableWorkers.pop();
       parseJob = parseQueue.shift();
@@ -294,7 +327,11 @@ function checkQueueLoop() {
       });
     }
 
-    while((hashQueue.length > 0) && (availableWorkers.length > 0)) {
+    while(
+      (hashQueue.length > 0)
+      && (availableWorkers.length > 0)
+      // && (runningHashJobs.length < 3)
+    ) {
       availableWorker = availableWorkers.pop();
       hashLogJob = hashQueue.shift();
       runningHashJobs.push(hashLogJob);
@@ -302,6 +339,18 @@ function checkQueueLoop() {
         messageType: MESSAGE_TYPES.HASH_FILE,
         data: {
           filePath: hashLogJob[0],
+        },
+      });
+    }
+    while((csvWriteQueue.length > 0) && (availableWorkers.length > 0)) {
+      availableWorker = availableWorkers.pop();
+      csvWriteJob = csvWriteQueue.shift();
+      runningCsvWriteJobs.push(csvWriteJob);
+      availableWorker.postMessage({
+        messageType: MESSAGE_TYPES.CSV_WRITE,
+        data: {
+          targetCsvPath: csvWriteJob[0],
+          rows: csvWriteJob[1],
         },
       });
     }
@@ -387,6 +436,25 @@ function initWorkerThread() {
                 data: {
                   filePath: hashFilePath,
                   fileHash,
+                },
+              });
+            });
+        }
+        break;
+      case MESSAGE_TYPES.CSV_WRITE:
+        const targetCsvPath = (msg?.data?.targetCsvPath as string);
+        const rows = (msg?.data?.rows as any[][]);
+        if((targetCsvPath === undefined) || rows === undefined) {
+          console.error('Error, malformed message sent to worker:');
+          console.error(`messageType: ${msg?.messageType}`);
+          console.error(`targetCsvPath: ${msg?.data?.targetCsvPath}`);
+        } else {
+          writeCsv(targetCsvPath, rows)
+            .then(() => {
+              parentPort.postMessage({
+                messageType: MESSAGE_TYPES.CSV_WRITE_COMPLETE,
+                data: {
+                  targetCsvPath,
                 },
               });
             });

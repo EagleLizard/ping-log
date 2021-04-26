@@ -28,35 +28,7 @@ export async function parseCsvLogs() {
 
   csvLogPaths = sortCsvLogPaths(csvLogPaths);
 
-  // csvLogPaths = csvLogPaths.slice(-3);
-  // csvLogPaths = csvLogPaths.filter(csvLogPath => {
-  //   const _dates = [
-  //     '03-15-2021',
-  //     '03-16-2021',
-  //     '03-17-2021',
-  //     '03-18-2021',
-  //     '03-19-2021',
-
-  //     '03-23-2021',
-  //     '03-24-2021',
-  //     '03-25-2021',
-  //     '03-26-2021',
-  //     '03-29-2021',
-  //     '03-30-2021',
-  //     '03-31-2021',
-
-  //     '04-01-2021',
-  //     '04-02-2021',
-  //     '04-05-2021',
-  //     '04-06-2021',
-  //     '04-07-2021',
-  //     '04-08-2021',
-  //   ];
-  //   return _dates.some(_date => {
-  //     return csvLogPath.includes(_date);
-  //   });
-  // });
-  csvLogPaths = csvLogPaths.slice(-100);
+  csvLogPaths = csvLogPaths.slice(-3);
   console.log(`num logs: ${csvLogPaths.length}`);
   // aggregator = new CsvAggregator();
   startMs = Date.now();
@@ -73,6 +45,10 @@ export async function parseCsvLogs() {
 
   // csvParseResults = await parseLogs(csvLogPaths);
 
+  aggregator = CsvAggregator.merge(
+    csvParseResults.map(csvParseResult => csvParseResult.aggregator)
+  );
+
   endMs = Date.now();
   deltaMs = endMs - startMs;
   [ deltaT, deltaLabel ] = getIntuitiveTimeFromMs(deltaMs);
@@ -83,6 +59,14 @@ export async function parseCsvLogs() {
   console.log(`parseLog took: ${deltaT.toFixed(2)} ${deltaLabel}`);
   console.log('\n');
   await destroyWorkers();
+
+  startMs = Date.now();
+  await writeStat(aggregator);
+  endMs = Date.now();
+  deltaMs = endMs - startMs;
+  [ deltaT, deltaLabel ] = getIntuitiveTimeFromMs(deltaMs);
+  console.log(`writeStat took: ${deltaT.toFixed(2)} ${deltaLabel}`);
+  console.log('\n');
 
   // startMs = Date.now();
   // aggregator = await analyzeCsvLogs(csvLogPaths);

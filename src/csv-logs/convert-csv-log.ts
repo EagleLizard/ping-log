@@ -16,19 +16,54 @@ export async function convertCsvLogFile(filePath: string): Promise<CsvLogConvert
   records = [];
   recordCount = 0;
   await scanLog(filePath, (record, recordIdx) => {
-    if(recordIdx === 0) {
-      if(
-        record[0] !== 'time_stamp'
-        || record[1] !== 'uri'
-        || record[2] !== 'ping_ms'
-      ) {
-        throw new Error(`Unexpected headers from source csv: ${record.join(', ')}`);
-      }
-      headers = record;
-    } else if(recordIdx !== 0) {
-      recordCount++;
-      records.push(record);
-    }
+    (
+      (recordIdx === 0)
+      && (
+        (record[0] !== 'time_stamp')
+          || (record[1] !== 'uri')
+          || (record[2] !== 'ping_ms')
+      ) && (
+        (() => {
+          throw new Error(`Unexpected headers from source csv: ${record.join(', ')}`)
+        })()
+      )
+    ) || (
+      (recordIdx !== 0) && (
+        recordCount++,
+        records.push([
+          (new Date(record[0])).valueOf(),
+          record[1],
+          +record[2],
+        ])
+      )
+    );
+    // (recordIdx !== 0) && (
+    //   recordCount++,
+    //   records.push([
+    //     record[0],
+    //     (new Date(record[1])).valueOf(),
+    //     record[2],
+    //     +record[3],
+    //   ])
+    // );
+    // if(recordIdx === 0) {
+    //   if(
+    //     record[0] !== 'time_stamp'
+    //     || record[1] !== 'uri'
+    //     || record[2] !== 'ping_ms'
+    //   ) {
+    //     throw new Error(`Unexpected headers from source csv: ${record.join(', ')}`);
+    //   }
+    //   headers = record;
+    // } else if(recordIdx !== 0) {
+    //   recordCount++;
+    //   records.push([
+    //     record[0],
+    //     (new Date(record[1])).valueOf(),
+    //     record[2],
+    //     +record[3],
+    //   ]);
+    // }
   });
   fileHash = await getFileHash(filePath);
 

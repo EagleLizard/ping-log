@@ -17,12 +17,22 @@ export async function parseCsvLog(logPath: string): Promise<CsvLogParseResult> {
 
   startMs = Date.now();
   await scanLog(logPath, (record, recordIdx) => {
-    if(recordIdx === 0) {
-      headers = record;
-    } else {
-      aggregator.aggregate(headers, record);
-      numRecords++;
-    }
+    (
+      (recordIdx === 0)
+      && (
+        headers = record
+      )
+      || (
+        aggregator.aggregate(headers, record),
+        numRecords++
+      )
+    );
+    // if(recordIdx === 0) {
+    //   headers = record;
+    // } else {
+    //   aggregator.aggregate(headers, record);
+    //   numRecords++;
+    // }
   });
   endMs = Date.now();
   parseMs = endMs - startMs;

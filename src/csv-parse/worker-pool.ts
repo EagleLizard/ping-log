@@ -17,9 +17,9 @@ const NUM_CPUS = os.cpus().length;
 const NUM_WORKERS = Math.round(
   // 1
   // NUM_CPUS - 1
-  // NUM_CPUS / Math.LOG2E
+  NUM_CPUS / Math.LOG2E
   // NUM_CPUS / Math.E
-  NUM_CPUS / 2
+  // NUM_CPUS / 2
   // NUM_CPUS / 4
   // NUM_CPUS
   // NUM_CPUS * 2
@@ -221,7 +221,7 @@ async function initMainThread() {
           if(foundParseJobIdx !== -1) {
             foundParseJob = runningParseJobs[foundParseJobIdx];
             runningParseJobs.splice(foundParseJobIdx, 1);
-            availableWorkers.push(worker);
+            addWorker(worker);
             foundParseJob[1](msg?.data?.parseResult);
           }
           break;
@@ -234,7 +234,7 @@ async function initMainThread() {
           if(foundConvertJobIdx !== -1) {
             foundConvertJob = runningConvertJobs[foundConvertJobIdx];
             runningConvertJobs.splice(foundConvertJobIdx, 1);
-            availableWorkers.push(worker);
+            addWorker(worker);
             foundConvertJob[1](msg?.data?.convertResult);
           }
           break;
@@ -247,7 +247,7 @@ async function initMainThread() {
           if(foundConvertLogJobIdx !== -1) {
             foundConvertLogJob = runningConvertLogJobs[foundConvertLogJobIdx];
             runningConvertLogJobs.splice(foundConvertLogJobIdx, 1);
-            availableWorkers.push(worker);
+            addWorker(worker);
             foundConvertLogJob[1](msg?.data?.convertLogResult);
           }
           break;
@@ -260,7 +260,7 @@ async function initMainThread() {
           if(foundHashJobIdx !== -1) {
             foundHashJob = runningHashJobs[foundHashJobIdx];
             runningHashJobs.splice(foundHashJobIdx, 1);
-            availableWorkers.push(worker);
+            addWorker(worker);
             foundHashJob[1]({
               filePath: msg?.data?.filePath,
               fileHash: msg?.data?.fileHash,
@@ -276,7 +276,7 @@ async function initMainThread() {
           if(foundCsvWriteJobIdx !== -1) {
             foundCsvWriteJob = runningCsvWriteJobs[foundCsvWriteJobIdx];
             runningCsvWriteJobs.splice(foundCsvWriteJobIdx, 1);
-            availableWorkers.push(worker);
+            addWorker(worker);
             foundCsvWriteJob[2]();
           }
       }
@@ -288,13 +288,31 @@ async function initMainThread() {
 
 function checkQueueLoop() {
   setTimeout(() => {
-    let availableWorker: Worker, parseJob: [ string, (parseResult: CsvLogParseResult) => void ];
-    let convertJob: [ CsvPathDate, (convertResult: CsvConvertResult) => void ];
-    let convertLogJob: [ string, (convertLogResult: CsvLogConvertResult) => void ];
-    let hashLogJob: [ string, (hashResult: HashLogResult) => void ];
-    let csvWriteJob: [ string, any[][], (err?: any) => void];
-    while((parseQueue.length > 0) && (availableWorkers.length > 0)) {
-      availableWorker = availableWorkers.pop();
+    checkQueues();
+    if(!areWorkersDestroyed) {
+      checkQueueLoop();
+    }
+  }, 128);
+}
+
+function addWorker(worker: Worker) {
+  availableWorkers.push(worker);
+  checkQueues();
+}
+
+function removeWorker(): Worker {
+  return availableWorkers.pop();
+}
+
+function checkQueues() {
+  let availableWorker: Worker, parseJob: [ string, (parseResult: CsvLogParseResult) => void ];
+  let convertJob: [ CsvPathDate, (convertResult: CsvConvertResult) => void ];
+  let convertLogJob: [ string, (convertLogResult: CsvLogConvertResult) => void ];
+  let hashLogJob: [ string, (hashResult: HashLogResult) => void ];
+  let csvWriteJob: [ string, any[][], (err?: any) => void];
+  if(availableWorkers.length > 0) {
+    while((availableWorkers.length > 0) && (parseQueue.length > 0)) {
+      availableWorker = removeWorker();
       parseJob = parseQueue.shift();
       runningParseJobs.push(parseJob);
       availableWorker.postMessage({
@@ -304,8 +322,8 @@ function checkQueueLoop() {
         },
       });
     }
-    while((convertQueue.length > 0) && (availableWorkers.length > 0)) {
-      availableWorker = availableWorkers.pop();
+    while((availableWorkers.length > 0) && (convertQueue.length > 0)) {
+      availableWorker = removeWorker();
       convertJob = convertQueue.shift();
       runningConvertJobs.push(convertJob);
       availableWorker.postMessage({
@@ -315,8 +333,8 @@ function checkQueueLoop() {
         },
       });
     }
-    while((convertLogQueue.length > 0) && (availableWorkers.length > 0)) {
-      availableWorker = availableWorkers.pop();
+    while((availableWorkers.length > 0) && (convertLogQueue.length > 0)) {
+      availableWorker = removeWorker();
       convertLogJob = convertLogQueue.shift();
       runningConvertLogJobs.push(convertLogJob);
       availableWorker.postMessage({
@@ -326,13 +344,12 @@ function checkQueueLoop() {
         },
       });
     }
-
     while(
-      (hashQueue.length > 0)
-      && (availableWorkers.length > 0)
+      (availableWorkers.length > 0)
+      && (hashQueue.length > 0)
       // && (runningHashJobs.length < 3)
     ) {
-      availableWorker = availableWorkers.pop();
+      availableWorker = removeWorker();
       hashLogJob = hashQueue.shift();
       runningHashJobs.push(hashLogJob);
       availableWorker.postMessage({
@@ -342,8 +359,8 @@ function checkQueueLoop() {
         },
       });
     }
-    while((csvWriteQueue.length > 0) && (availableWorkers.length > 0)) {
-      availableWorker = availableWorkers.pop();
+    while((availableWorkers.length > 0) && (csvWriteQueue.length > 0)) {
+      availableWorker = removeWorker();
       csvWriteJob = csvWriteQueue.shift();
       runningCsvWriteJobs.push(csvWriteJob);
       availableWorker.postMessage({
@@ -354,11 +371,7 @@ function checkQueueLoop() {
         },
       });
     }
-
-    if(!areWorkersDestroyed) {
-      checkQueueLoop();
-    }
-  }, 10);
+  }
 }
 
 function initWorkerThread() {

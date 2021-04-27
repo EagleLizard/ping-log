@@ -113,8 +113,7 @@ export async function getHashesConcurrent(csvPathDates: CsvPathDate[], hashLogMe
         ]);
         pathsCompletCount++;
         printProgress(pathsCompletCount, csvFilePaths.length);
-      })
-      .then(() => sleep(10));
+      });
   });
   await Promise.all(hashJobPromises);
   endMs = Date.now();

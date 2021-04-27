@@ -28,7 +28,7 @@ export async function parseCsvLogs() {
 
   csvLogPaths = sortCsvLogPaths(csvLogPaths);
 
-  csvLogPaths = csvLogPaths.slice(-3);
+  csvLogPaths = csvLogPaths.slice(-8);
   console.log(`num logs: ${csvLogPaths.length}`);
   // aggregator = new CsvAggregator();
   startMs = Date.now();

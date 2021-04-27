@@ -10,6 +10,7 @@ import { CsvLogMeta, _HashLogMetaValue } from './csv-log-meta';
 import { CsvWriter } from '../lib/csv-writer';
 import { initializePool, destroyWorkers, queueConvertCsvLog, } from '../csv-parse/worker-pool';
 import { promises } from 'fs';
+import { sleep } from '../lib/sleep';
 
 export async function convertCsvLogs() {
   let csvPaths: string[], csvPathDates: CsvPathDate[];
@@ -21,7 +22,7 @@ export async function convertCsvLogs() {
   csvPaths = await listDir(CSV_PING_LOG_DIR);
   _hashLogMeta = await CsvLogMeta.getLogHashMeta();
 
-  const pastDays = 18;
+  const pastDays = 7;
   // const pastMs = Date.now() - ((1000 * 60 * 60 * 24) * pastDays);
   const today = new Date;
   const pastMs = (new Date(today.getFullYear(), today.getMonth(), today.getDate() - pastDays)).valueOf();
@@ -108,6 +109,11 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
 
     for(let k = 0, filePath: string; filePath = filePaths[k], k < filePaths.length; ++k) {
       let convertLogPromise: Promise<void>;
+
+      if(k !== 0) {
+        await sleep(192);
+      }
+
       convertLogPromise = queueConvertCsvLog(filePath)
         .then(convertLogResult => {
           fileHashTuples.push([

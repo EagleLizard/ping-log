@@ -13,6 +13,8 @@ import { analyzeCsvLogs } from './analyze-csv-logs';
 import { CsvLogParseResult, parseCsvLog } from './parse-csv-log';
 import { destroyWorkers, initializePool, queueParseCsv } from './worker-pool';
 import { getIntuitiveTimeFromMs, printProgress } from '../print';
+import { Timer } from '../lib/timer';
+import { sleep } from '../lib/sleep';
 
 export async function parseCsvLogs() {
   let db: DB;
@@ -28,33 +30,17 @@ export async function parseCsvLogs() {
 
   csvLogPaths = sortCsvLogPaths(csvLogPaths);
 
-  csvLogPaths = csvLogPaths.slice(-8);
+  csvLogPaths = csvLogPaths.slice(-5);
   console.log(`num logs: ${csvLogPaths.length}`);
-  // aggregator = new CsvAggregator();
-  startMs = Date.now();
 
-  await initializePool();
-  const csvJobPromises = csvLogPaths.map(csvLogPath => {
-    return queueParseCsv(csvLogPath).then((parseResult) => {
-      doneCount++;
-      printProgress(doneCount, csvLogPaths.length);
-      return parseResult;
-    });
-  });
-  csvParseResults = await Promise.all(csvJobPromises);
+  const parseResult = await parseLogsConcurrent(csvLogPaths);
+  aggregator = parseResult.aggregator;
 
-  // csvParseResults = await parseLogs(csvLogPaths);
 
-  aggregator = CsvAggregator.merge(
-    csvParseResults.map(csvParseResult => csvParseResult.aggregator)
-  );
-
-  endMs = Date.now();
-  deltaMs = endMs - startMs;
+  recordCount = parseResult.numRecords;
+  deltaMs = parseResult.parseMs;
   [ deltaT, deltaLabel ] = getIntuitiveTimeFromMs(deltaMs);
-  recordCount = csvParseResults.reduce((acc, curr) => {
-    return acc + curr.numRecords;
-  }, 0);
+
   console.log(`\n${recordCount.toLocaleString()} records`);
   console.log(`parseLog took: ${deltaT.toFixed(2)} ${deltaLabel}`);
   console.log('\n');
@@ -67,14 +53,51 @@ export async function parseCsvLogs() {
   [ deltaT, deltaLabel ] = getIntuitiveTimeFromMs(deltaMs);
   console.log(`writeStat took: ${deltaT.toFixed(2)} ${deltaLabel}`);
   console.log('\n');
+}
 
-  // startMs = Date.now();
-  // aggregator = await analyzeCsvLogs(csvLogPaths);
-  // endMs = Date.now();
-  // deltaMs = endMs - startMs;
-  // [ deltaT, deltaLabel ] = getIntuitiveTimeFromMs(deltaMs);
-  // console.log(`parseLog took: ${deltaT.toFixed(2)} ${deltaLabel}`);
-  // await writeStat(aggregator);
+async function parseLogsConcurrent(csvLogPaths: string[]): Promise<CsvLogParseResult> {
+  let db: DB;
+  let csvJobPromises: Promise<CsvLogParseResult>[], csvParseResults: CsvLogParseResult[], aggregator: CsvAggregator;
+  let deltaMs: number, deltaT: number, deltaLabel: string;
+  let timer: Timer;
+  let recordCount: number;
+  let doneCount: number;
+  doneCount = 0;
+  csvJobPromises = [];
+
+  timer = Timer.start();
+
+  await initializePool();
+  for(let i = 0, csvLogPath: string; csvLogPath = csvLogPaths[i], i < csvLogPaths.length; ++i) {
+    let csvJobPromise: Promise<CsvLogParseResult>;
+    if(i !== 0) {
+      // await sleep(64);
+      await sleep(512);
+    }
+    csvJobPromise = queueParseCsv(csvLogPath).then((parseResult) => {
+      doneCount++;
+      printProgress(doneCount, csvLogPaths.length);
+      return parseResult;
+    });
+    csvJobPromises.push(csvJobPromise);
+  }
+  await Promise.all(csvJobPromises);
+  csvParseResults = await Promise.all(csvJobPromises);
+  aggregator = CsvAggregator.merge(
+    csvParseResults.map(csvParseResult => csvParseResult.aggregator)
+  );
+
+  // csvParseResults = await parseLogs(csvLogPaths);
+
+  deltaMs = timer.stop();
+  recordCount = csvParseResults.reduce((acc, curr) => {
+    return acc + curr.numRecords;
+  }, 0);
+  return {
+    aggregator,
+    numRecords: recordCount,
+    parseMs: deltaMs,
+  };
 }
 
 async function parseLogs(csvLogPaths: string[]): Promise<CsvLogParseResult[]> {

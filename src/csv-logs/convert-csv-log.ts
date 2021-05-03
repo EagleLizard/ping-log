@@ -10,12 +10,16 @@ export interface CsvLogConvertResult {
   recordCount: number;
 }
 
-export async function convertCsvLogFile(filePath: string): Promise<CsvLogConvertResult> {
+export async function convertCsvLogFile(filePath: string, recordCb?: (record: any[]) => void): Promise<CsvLogConvertResult> {
   let headers: any[], records: any[][], fileHash: string;
   let recordCount: number;
+  if(recordCb === undefined) {
+    recordCb = (record: any[]) => void 0;
+  }
   records = [];
   recordCount = 0;
   await scanLog(filePath, (record, recordIdx) => {
+    let convertedRecord: any[];
     (
       (recordIdx === 0)
       && (
@@ -24,46 +28,21 @@ export async function convertCsvLogFile(filePath: string): Promise<CsvLogConvert
           || (record[2] !== 'ping_ms')
       ) && (
         (() => {
-          throw new Error(`Unexpected headers from source csv: ${record.join(', ')}`)
+          throw new Error(`Unexpected headers from source csv: ${record.join(', ')}`);
         })()
       )
     ) || (
       (recordIdx !== 0) && (
         recordCount++,
-        records.push([
+        convertedRecord = [
           (new Date(record[0])).valueOf(),
           record[1],
           +record[2],
-        ])
+        ],
+        recordCb(convertedRecord)
       )
     );
-    // (recordIdx !== 0) && (
-    //   recordCount++,
-    //   records.push([
-    //     record[0],
-    //     (new Date(record[1])).valueOf(),
-    //     record[2],
-    //     +record[3],
-    //   ])
-    // );
-    // if(recordIdx === 0) {
-    //   if(
-    //     record[0] !== 'time_stamp'
-    //     || record[1] !== 'uri'
-    //     || record[2] !== 'ping_ms'
-    //   ) {
-    //     throw new Error(`Unexpected headers from source csv: ${record.join(', ')}`);
-    //   }
-    //   headers = record;
-    // } else if(recordIdx !== 0) {
-    //   recordCount++;
-    //   records.push([
-    //     record[0],
-    //     (new Date(record[1])).valueOf(),
-    //     record[2],
-    //     +record[3],
-    //   ]);
-    // }
+
   });
   fileHash = await getFileHash(filePath);
 

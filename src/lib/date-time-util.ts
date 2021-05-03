@@ -98,3 +98,12 @@ export function getCsvPathDates(csvPaths: string[], _hashLogMeta: _HashLogMetaVa
   });
   return csvPathDates;
 }
+
+export function isDateInRange(targetDate: Date, dateRange: [ Date, Date ]): boolean {
+  let inRange: boolean, minDate: Date, maxDate: Date;
+  [ minDate, maxDate ] = dateRange;
+  inRange = (targetDate > minDate)
+    && (targetDate < maxDate)
+  ;
+  return inRange;
+}

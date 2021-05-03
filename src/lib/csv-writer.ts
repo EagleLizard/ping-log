@@ -4,7 +4,7 @@ import fs from 'fs';
 import { Writable } from 'stream';
 
 import csvStringify, { Stringifier } from 'csv-stringify';
-import { sleep } from './sleep';
+import { sleep, sleepImmediate } from './sleep';
 
 export class CsvWriter {
   csvPath: string;
@@ -23,7 +23,8 @@ export class CsvWriter {
   async write(record: any[]) {
     while(this.draining) {
       // console.log('drain');
-      await sleep(1);
+      // await sleep(0);
+      await sleepImmediate();
     }
     try {
       return new Promise<void>(resolve => {

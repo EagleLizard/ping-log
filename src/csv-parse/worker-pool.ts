@@ -11,21 +11,36 @@ import { convertCsvPathDate, CsvConvertResult } from '../csv-logs/convert-csv-pa
 import { CsvPathDate } from '../lib/date-time-util';
 import { CsvLogConvertResult, convertCsvLogFile } from '../csv-logs/convert-csv-log';
 import { getFileHash, HashLogResult } from '../csv-logs/hash-log';
-import { writeCsv } from '../lib/csv-writer';
+import { CsvWriter, writeCsv } from '../lib/csv-writer';
 
 const NUM_CPUS = os.cpus().length;
 const NUM_WORKERS = Math.round(
-  // 1
+  // 2
+  // NUM_CPUS - 2
   // NUM_CPUS - 1
+  // NUM_CPUS
   NUM_CPUS / Math.LOG2E
   // NUM_CPUS / Math.E
   // NUM_CPUS / 2
   // NUM_CPUS / 4
-  // NUM_CPUS
   // NUM_CPUS * 2
   // NUM_CPUS * 4
   // NUM_CPUS * 8
   // NUM_CPUS - 2
+);
+
+const ASYNC_READ_RECORD_QUEUE_SIZE = Math.round(
+  // 1024
+  // 1.375e4
+  // 1.75e4
+
+  // 8.192e4
+  // 1.6384e4
+  // 2.4576e4
+  3.2768e4
+  // 4.9152e4
+  // 6.5536e4
+  // 1.31072e5
 );
 
 enum MESSAGE_TYPES {
@@ -39,12 +54,20 @@ enum MESSAGE_TYPES {
   CONVERT_CSV_COMPLETE = 'convert_csv_complete',
   CONVERT_CSV_LOG = 'convert_csv_log',
   CONVERT_CSV_LOG_COMPLETE = 'convert_csv_log_complete',
+  CONVERT_CSV_LOG_RECORD_READ = 'convert_csv_log_record_read',
+  CSV_WRITER_INIT = 'csv_writer_init',
+  CSV_WRITER_WRITE = 'csv_writer_write',
+  CSV_WRITER_WRITE_DONE = 'csv_writer_write_done',
+  CSV_WRITER_END = 'csv_writer_end',
   CSV_WRITE = 'csv_write',
   CSV_WRITE_COMPLETE = 'csv_write_complete'
 }
 
 let workers: Worker[] = [];
 let availableWorkers: Worker[] = [];
+
+let asyncCsvWriterWorker: Worker;
+let asyncCsvWriter: CsvWriter;
 
 let hashQueue: [ string, (hashResult: HashLogResult) => void ][] = [];
 let runningHashJobs: [ string, (hashResult: HashLogResult) => void ][] = [];
@@ -55,14 +78,31 @@ let runningParseJobs: [ string, (parseResult: CsvLogParseResult) => void ][] = [
 let convertQueue: [ CsvPathDate, (convertResult: CsvConvertResult) => void ][] = [];
 let runningConvertJobs: [ CsvPathDate, (convertResult: CsvConvertResult) => void ][] = [];
 
-let convertLogQueue: [ string, (convertLogResult: CsvLogConvertResult) => void ][] = [];
-let runningConvertLogJobs: [ string, (converLogResult: CsvLogConvertResult) => void ][] = [];
+let convertLogQueue: [
+  string,
+  (convertLogResult: CsvLogConvertResult) => void,
+  (records: any[][]) => Promise<void>,
+  () => void,
+][] = [];
+let runningConvertLogJobs: [
+  string,
+  (converLogResult: CsvLogConvertResult) => void,
+  (records: any[][]) => Promise<void>,
+  () => void,
+][] = [];
 
 let csvWriteQueue: [ string, any[][], (err?:any) => void ][] = [];
 let runningCsvWriteJobs: [ string, any[][], (err?:any) => void ][] = [];
 
 let isInitialized = false;
 let areWorkersDestroyed = false;
+
+let convertRecordReadCount = 0;
+
+export interface AsyncCsvWriter {
+  write: (records: any[][]) => Promise<void>;
+  end: () => Promise<void>;
+}
 
 interface WorkerMessage {
   messageType: MESSAGE_TYPES,
@@ -81,6 +121,73 @@ if(!isMainThread) {
 //     throw e;
 //   }
 // })();
+
+export async function getAsyncCsvWriter(filePath: string): Promise<AsyncCsvWriter> {
+  let isWriting: boolean;
+  while(availableWorkers.length < 1) {
+    await sleep(1);
+  }
+  asyncCsvWriterWorker = availableWorkers.pop();
+  asyncCsvWriterWorker.postMessage({
+    messageType: MESSAGE_TYPES.CSV_WRITER_INIT,
+    data: {
+      filePath,
+    }
+  });
+  await new Promise<void>((resolve, reject) => {
+    asyncCsvWriterWorker.once('message', msg => {
+      if(msg?.messageType === MESSAGE_TYPES.CSV_WRITER_INIT) {
+        resolve();
+      } else {
+        reject(msg);
+      }
+    });
+  });
+
+  isWriting = false;
+
+  return {
+    write,
+    end,
+  };
+
+  async function write(records: any[][]) {
+    while(isWriting) {
+      await sleep(0);
+    }
+    isWriting = true;
+    asyncCsvWriterWorker.postMessage({
+      messageType: MESSAGE_TYPES.CSV_WRITER_WRITE,
+      data: {
+        records,
+      },
+    });
+    // records.length = 0;
+    await new Promise<void>(resolve => {
+      asyncCsvWriterWorker.once('message', msg => {
+        if(msg?.messageType === MESSAGE_TYPES.CSV_WRITER_WRITE_DONE) {
+          isWriting = false;
+          resolve();
+        }
+      });
+    });
+  }
+
+  async function end() {
+    asyncCsvWriterWorker.postMessage({
+      messageType: MESSAGE_TYPES.CSV_WRITER_END,
+    });
+    return new Promise<void>(resolve => {
+      asyncCsvWriterWorker.once('message', msg => {
+        if(msg?.messageType === MESSAGE_TYPES.CSV_WRITER_END) {
+          availableWorkers.push(asyncCsvWriterWorker);
+          asyncCsvWriterWorker = undefined;
+          resolve();
+        }
+      });
+    });
+  }
+}
 
 export function queueHashJob(filePath: string) {
   return new Promise<HashLogResult>((resolve, reject) => {
@@ -116,7 +223,7 @@ export function queueConvertCsv(csvPathDate: CsvPathDate) {
     ]);
   });
 }
-export function queueConvertCsvLog(csvPath: string) {
+export function queueConvertCsvLog(csvPath: string, recordsCb: (records: any[][]) => Promise<void>, readStartCb: () => void) {
   return new Promise<CsvLogConvertResult>((resolve, reject) => {
     const resolver = (convertLogResult: CsvLogConvertResult) => {
       resolve(convertLogResult);
@@ -124,6 +231,8 @@ export function queueConvertCsvLog(csvPath: string) {
     convertLogQueue.push([
       csvPath,
       resolver,
+      recordsCb,
+      readStartCb,
     ]);
   });
 }
@@ -178,6 +287,7 @@ async function initMainThread() {
   let ackPromises: Promise<void>[];
   console.log('initializing main thread');
   console.log(`NUM_WORKERS: ${NUM_WORKERS}`);
+  console.log(`ASYNC_READ_RECORD_QUEUE_SIZE: ${ASYNC_READ_RECORD_QUEUE_SIZE.toLocaleString()}`);
   for(let i = 0; i < NUM_WORKERS; ++i) {
     let worker: Worker;
     worker = new Worker(__filename);
@@ -206,6 +316,14 @@ async function initMainThread() {
   workers.forEach(worker => {
     worker.on('message', msg => {
       let messageType: MESSAGE_TYPES;
+      let foundConvertLogJobIdx: number;
+      let foundConvertLogJob: [
+        string,
+        (convertLogResult: CsvLogConvertResult) => void,
+        (records: any[][]) => Promise<void>,
+        () => void,
+      ];
+
       messageType = msg?.messageType;
       if(messageType === undefined) {
         console.error('malformed message in main from worker:');
@@ -238,9 +356,22 @@ async function initMainThread() {
             foundConvertJob[1](msg?.data?.convertResult);
           }
           break;
+        /*
+
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        v v v v v v v v v v v v v v v v v v v v v
+
+        */
+        case MESSAGE_TYPES.CONVERT_CSV_LOG_RECORD_READ:
+          foundConvertLogJobIdx = runningConvertLogJobs.findIndex((convertLogJob) => {
+            return convertLogJob[0] === msg?.data?.filePath;
+          });
+          if(foundConvertLogJobIdx !== -1) {
+            foundConvertLogJob = runningConvertLogJobs[foundConvertLogJobIdx];
+            foundConvertLogJob[2](msg?.data?.records);
+          }
+          break;
         case MESSAGE_TYPES.CONVERT_CSV_LOG_COMPLETE:
-          let foundConvertLogJobIdx: number;
-          let foundConvertLogJob: [ string, (convertLogResult: CsvLogConvertResult) => void ];
           foundConvertLogJobIdx = runningConvertLogJobs.findIndex((convertLogJob) => {
             return convertLogJob[0] === msg?.data?.filePath;
           });
@@ -288,7 +419,7 @@ async function initMainThread() {
 
 function checkQueueLoop() {
   setTimeout(() => {
-    checkQueues();
+    checkQueues(true);
     if(!areWorkersDestroyed) {
       checkQueueLoop();
     }
@@ -304,13 +435,22 @@ function removeWorker(): Worker {
   return availableWorkers.pop();
 }
 
-function checkQueues() {
+function checkQueues(queueLoop?: boolean) {
   let availableWorker: Worker, parseJob: [ string, (parseResult: CsvLogParseResult) => void ];
   let convertJob: [ CsvPathDate, (convertResult: CsvConvertResult) => void ];
-  let convertLogJob: [ string, (convertLogResult: CsvLogConvertResult) => void ];
+  let convertLogJob: [
+    string,
+    (convertLogResult: CsvLogConvertResult) => void,
+    (records: any[][]) => Promise<void>,
+    () => void,
+  ];
   let hashLogJob: [ string, (hashResult: HashLogResult) => void ];
   let csvWriteJob: [ string, any[][], (err?: any) => void];
   if(availableWorkers.length > 0) {
+    if(!queueLoop) {
+      // console.log(`availableWOrkers: ${availableWorkers.length}`);
+      // console.log(`convertQueue: ${convertLogQueue.length}`);
+    }
     while((availableWorkers.length > 0) && (parseQueue.length > 0)) {
       availableWorker = removeWorker();
       parseJob = parseQueue.shift();
@@ -337,6 +477,7 @@ function checkQueues() {
       availableWorker = removeWorker();
       convertLogJob = convertLogQueue.shift();
       runningConvertLogJobs.push(convertLogJob);
+      convertLogJob[3](); // recordStartCb
       availableWorker.postMessage({
         messageType: MESSAGE_TYPES.CONVERT_CSV_LOG,
         data: {
@@ -418,22 +559,96 @@ function initWorkerThread() {
             });
         }
         break;
+      /*
+
+      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      v v v v v v v v v v v v v v v v v v v v v
+
+    */
+      case MESSAGE_TYPES.CSV_WRITER_INIT:
+        const asyncCsvWriterPath = (msg?.data?.filePath as string);
+        if(asyncCsvWriterPath === undefined) {
+          console.error('Error, malformed message sent to worker:');
+          console.error(msg);
+        } else {
+          asyncCsvWriter = new CsvWriter(asyncCsvWriterPath);
+          parentPort.postMessage({
+            messageType: MESSAGE_TYPES.CSV_WRITER_INIT,
+          });
+        }
+        break;
+      case MESSAGE_TYPES.CSV_WRITER_END:
+        if(asyncCsvWriter !== undefined) {
+          (async () => {
+            await asyncCsvWriter.end();
+            asyncCsvWriter = undefined;
+            parentPort.postMessage({
+              messageType: MESSAGE_TYPES.CSV_WRITER_END,
+            });
+          })();
+        }
+        break;
+      case MESSAGE_TYPES.CSV_WRITER_WRITE:
+        const asyncCsvWriteRecords = (msg?.data?.records as any[][]);
+        if(!Array.isArray(asyncCsvWriteRecords)) {
+          console.error('Error, malformed message sent to worker:');
+          console.log(msg?.messageType);
+        } else {
+          (async () => {
+            // while(asyncCsvWriteRecords.length > 0) {
+            //   await asyncCsvWriter.write(asyncCsvWriteRecords.pop());
+            // }
+            for(let i = 0; i < asyncCsvWriteRecords.length; ++i) {
+              await asyncCsvWriter.write(asyncCsvWriteRecords[i]);
+            }
+            parentPort.postMessage({
+              messageType: MESSAGE_TYPES.CSV_WRITER_WRITE_DONE,
+            });
+          })();
+        }
+        // asyncCsvWriter.write();
+        break;
       case MESSAGE_TYPES.CONVERT_CSV_LOG:
         const filePath = (msg?.data?.filePath as string);
         if(filePath === undefined) {
           console.error('Error, malformed message sent to worker:');
           console.error(msg);
         } else {
-          convertCsvLogFile(filePath)
-            .then(convertLogResult => {
-              parentPort.postMessage({
-                messageType: MESSAGE_TYPES.CONVERT_CSV_LOG_COMPLETE,
-                data: {
-                  filePath,
-                  convertLogResult,
-                },
-              });
+          const recordQueue: any[][] = [];
+          const clearRecordQueue = () => {
+            parentPort.postMessage({
+              messageType: MESSAGE_TYPES.CONVERT_CSV_LOG_RECORD_READ,
+              data: {
+                filePath,
+                records: recordQueue.slice(),
+              },
             });
+            recordQueue.length = 0;
+          };
+          const recordCb = (record: any[]) => {
+            recordQueue.push(record);
+            if(recordQueue.length > ASYNC_READ_RECORD_QUEUE_SIZE) {
+              clearRecordQueue();
+            }
+          };
+          sleep(0).then(() => {
+            return convertCsvLogFile(filePath, recordCb)
+              .then(convertLogResult => {
+                if(recordQueue.length > 0) {
+                  clearRecordQueue();
+                }
+                return convertLogResult;
+              })
+              .then(convertLogResult => {
+                parentPort.postMessage({
+                  messageType: MESSAGE_TYPES.CONVERT_CSV_LOG_COMPLETE,
+                  data: {
+                    filePath,
+                    convertLogResult,
+                  },
+                });
+              });
+          });
         }
         break;
       case MESSAGE_TYPES.HASH_FILE:

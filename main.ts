@@ -3,6 +3,7 @@ sourceMapSupport.install();
 
 import { convertCsvLogs } from './src/csv-logs/convert-csv-logs';
 import { parseCsvLogs } from './src/csv-parse/parse-csv-logs';
+import { readCsvLogs } from './src/csv-parse/read-csv-logs';
 import { dbTest } from './src/db/record-id-db';
 
 (async () => {
@@ -21,6 +22,8 @@ async function main(argv: string[]) {
     await convertCsvLogs();
   } else if(flag === '-db') {
     await dbTest();
+  } else if(flag === '-r') {
+    await readCsvLogs();
   } else {
     await parseCsvLogs();
   }

@@ -12,15 +12,16 @@ import { CsvPathDate } from '../lib/date-time-util';
 import { CsvLogConvertResult, convertCsvLogFile } from '../csv-logs/convert-csv-log';
 import { getFileHash, HashLogResult } from '../csv-logs/hash-log';
 import { CsvWriter, writeCsv } from '../lib/csv-writer';
+import { CsvReadResult, readCsvLog } from '../csv-parse/read-csv-log';
 
 const NUM_CPUS = os.cpus().length;
-const NUM_WORKERS = Math.round(
+export const NUM_WORKERS = Math.round(
+  // 1
   // 2
   // NUM_CPUS - 2
   // NUM_CPUS - 1
   // NUM_CPUS
   NUM_CPUS / Math.LOG2E
-  // NUM_CPUS / Math.E
   // NUM_CPUS / 2
   // NUM_CPUS / 4
   // NUM_CPUS * 2
@@ -30,14 +31,15 @@ const NUM_WORKERS = Math.round(
 );
 
 const ASYNC_READ_RECORD_QUEUE_SIZE = Math.round(
-  // 1024
-  // 1.375e4
-  // 1.75e4
-
-  // 8.192e4
+  // 0.128e3
+  // 0.256e3
+  // 0.512e3
+  // 1.024e3
+  // 2.048e3
+  // 4.096e3
+  8.192e3
   // 1.6384e4
-  // 2.4576e4
-  3.2768e4
+  // 3.2768e4
   // 4.9152e4
   // 6.5536e4
   // 1.31072e5
@@ -60,7 +62,10 @@ enum MESSAGE_TYPES {
   CSV_WRITER_WRITE_DONE = 'csv_writer_write_done',
   CSV_WRITER_END = 'csv_writer_end',
   CSV_WRITE = 'csv_write',
-  CSV_WRITE_COMPLETE = 'csv_write_complete'
+  CSV_WRITE_COMPLETE = 'csv_write_complete',
+  CSV_READ = 'csv_read',
+  CSV_READ_COMPLETE = 'csv_read_complete',
+  ASYNC_CSV_READ = 'async_csv_read',
 }
 
 let workers: Worker[] = [];
@@ -74,6 +79,16 @@ let runningHashJobs: [ string, (hashResult: HashLogResult) => void ][] = [];
 
 let parseQueue: [ string, (parseResult: CsvLogParseResult) => void ][] = [];
 let runningParseJobs: [ string, (parseResult: CsvLogParseResult) => void ][] = [];
+
+type ReadCsvJobTuple = [
+  string,
+  (readReadResult: CsvReadResult) => void,
+  () => void,
+  (records: any[]) => void,
+];
+
+let readCsvQueue: ReadCsvJobTuple[] = [];
+let runningReadCsvJobs: ReadCsvJobTuple[] = [];
 
 let convertQueue: [ CsvPathDate, (convertResult: CsvConvertResult) => void ][] = [];
 let runningConvertJobs: [ CsvPathDate, (convertResult: CsvConvertResult) => void ][] = [];
@@ -248,6 +263,19 @@ export function queueCsvWriteJob(targetCsvPath: string, rows: any[][]) {
     ]);
   });
 }
+export function queueCsvReadJob(targetCsvPath: string, readStartCb: () => void, recordsCb: (records: any[]) => void) {
+  return new Promise<CsvReadResult>((resolve, reject) => {
+    const resolver = (csvReadResult: CsvReadResult) => {
+      resolve(csvReadResult);
+    };
+    readCsvQueue.push([
+      targetCsvPath,
+      resolver,
+      readStartCb,
+      recordsCb,
+    ]);
+  });
+}
 
 export async function initializePool() {
   if(isMainThread) {
@@ -323,6 +351,8 @@ async function initMainThread() {
         (records: any[][]) => Promise<void>,
         () => void,
       ];
+      let foundCsvReadLogJob: ReadCsvJobTuple;
+      let foundCsvReadLogJobIdx: number;
 
       messageType = msg?.messageType;
       if(messageType === undefined) {
@@ -354,6 +384,32 @@ async function initMainThread() {
             runningConvertJobs.splice(foundConvertJobIdx, 1);
             addWorker(worker);
             foundConvertJob[1](msg?.data?.convertResult);
+          }
+          break;
+        /*
+
+        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+        v v v v v v v v v v v v v v v v v v v v v
+
+        */
+        case MESSAGE_TYPES.CSV_READ_COMPLETE:
+          foundCsvReadLogJobIdx = runningReadCsvJobs.findIndex((readJob) => {
+            return readJob[0] === msg?.data?.csvPath;
+          });
+          if(foundCsvReadLogJobIdx !== -1) {
+            foundCsvReadLogJob = runningReadCsvJobs[foundCsvReadLogJobIdx];
+            runningReadCsvJobs.splice(foundCsvReadLogJobIdx, 1);
+            addWorker(worker);
+            foundCsvReadLogJob[1](msg?.data?.readResult);
+          }
+          break;
+        case MESSAGE_TYPES.ASYNC_CSV_READ:
+          foundCsvReadLogJobIdx = runningReadCsvJobs.findIndex((readJob) => {
+            return readJob[0] === msg?.data?.csvPath;
+          });
+          if(foundCsvReadLogJobIdx !== -1) {
+            foundCsvReadLogJob = runningReadCsvJobs[foundCsvReadLogJobIdx];
+            foundCsvReadLogJob[3](msg?.data?.records);
           }
           break;
         /*
@@ -446,6 +502,8 @@ function checkQueues(queueLoop?: boolean) {
   ];
   let hashLogJob: [ string, (hashResult: HashLogResult) => void ];
   let csvWriteJob: [ string, any[][], (err?: any) => void];
+  let csvReadJob: ReadCsvJobTuple;
+  let readStartCb: () => void;
   if(availableWorkers.length > 0) {
     if(!queueLoop) {
       // console.log(`availableWOrkers: ${availableWorkers.length}`);
@@ -512,10 +570,24 @@ function checkQueues(queueLoop?: boolean) {
         },
       });
     }
+    while((availableWorkers.length > 0) && (readCsvQueue.length > 0)) {
+      availableWorker = removeWorker();
+      csvReadJob = readCsvQueue.shift();
+      readStartCb = csvReadJob[2];
+      runningReadCsvJobs.push(csvReadJob);
+      readStartCb();
+      availableWorker.postMessage({
+        messageType: MESSAGE_TYPES.CSV_READ,
+        data: {
+          csvPath: csvReadJob[0],
+        },
+      });
+    }
   }
 }
 
 function initWorkerThread() {
+  let recordCb: (record: any[], idx: number) => void;
   parentPort.on('message', (msg: WorkerMessage) => {
     switch(msg.messageType) {
       case MESSAGE_TYPES.ACK:
@@ -529,16 +601,18 @@ function initWorkerThread() {
           console.error('Error, malformed message sent to worker:');
           console.error(msg);
         } else {
-          parseCsvLog(csvPath)
-            .then(parseResult => {
-              parentPort.postMessage({
-                messageType: MESSAGE_TYPES.PARSE_CSV_COMPLETE,
-                data: {
-                  parseResult,
-                  csvPath,
-                },
+          sleep(0).then(() => {
+            return parseCsvLog(csvPath)
+              .then(parseResult => {
+                parentPort.postMessage({
+                  messageType: MESSAGE_TYPES.PARSE_CSV_COMPLETE,
+                  data: {
+                    parseResult,
+                    csvPath,
+                  },
+                });
               });
-            });
+          });
         }
         break;
       case MESSAGE_TYPES.CONVERT_CSV:
@@ -564,7 +638,48 @@ function initWorkerThread() {
       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
       v v v v v v v v v v v v v v v v v v v v v
 
-    */
+      */
+      case MESSAGE_TYPES.CSV_READ:
+        const readCsvPath = (msg?.data?.csvPath as string);
+        const recordReadQueue: any[][] = [];
+        const clearReadQueue = () => {
+          parentPort.postMessage({
+            messageType: MESSAGE_TYPES.ASYNC_CSV_READ,
+            data: {
+              csvPath: readCsvPath,
+              records: recordReadQueue,
+            }
+          });
+          recordReadQueue.length = 0;
+        };
+        recordCb = (record, idx) => {
+          recordReadQueue.push(record);
+          if(recordReadQueue.length > ASYNC_READ_RECORD_QUEUE_SIZE) {
+            clearReadQueue();
+          }
+        };
+        if(readCsvPath === undefined) {
+          console.error('Error, malformed message sent to worker:');
+          console.error(msg);
+        } else {
+          readCsvLog(readCsvPath, recordCb).then(csvReadResult => {
+            clearReadQueue();
+            parentPort.postMessage({
+              messageType: MESSAGE_TYPES.CSV_READ_COMPLETE,
+              data: {
+                csvPath: readCsvPath,
+                readResult: csvReadResult,
+              },
+            });
+          });
+        }
+        break;
+      /*
+
+      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+      v v v v v v v v v v v v v v v v v v v v v
+
+      */
       case MESSAGE_TYPES.CSV_WRITER_INIT:
         const asyncCsvWriterPath = (msg?.data?.filePath as string);
         if(asyncCsvWriterPath === undefined) {

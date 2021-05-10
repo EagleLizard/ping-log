@@ -9,54 +9,35 @@ import { getHashesConcurrent } from './hash-log';
 import { CsvLogMeta, _HashLogMetaValue } from './csv-log-meta';
 import { CsvWriter } from '../lib/csv-writer';
 import { initializePool, destroyWorkers, queueConvertCsvLog, AsyncCsvWriter, getAsyncCsvWriter, } from '../csv-parse/worker-pool';
-import { sleepImmediate } from '../lib/sleep';
+import { sleep, sleepImmediate } from '../lib/sleep';
 import { Timer } from '../lib/timer';
 
 const USE_EXT_DIR = false;
+const today = new Date;
+const daysSinceNewInternet = (
+  (
+    (new Date(today.getFullYear(), today.getMonth(), today.getDate()))
+      .valueOf() / 1000 / 60 / 60 / 24
+  ) - (
+    (new Date('2020-10-23')
+      .valueOf() / 1000 / 60 / 60 / 24)
+  )
+);
 
-let USE_TEST_DATES: boolean;
-USE_TEST_DATES = false;
+let USE_TEST_DATES: boolean, daysInPast: number, pastDays: number;
+// USE_TEST_DATES = false;
+USE_TEST_DATES = true;
+// pastDays = 3;
+pastDays = 7;
+// pastDays = 14;
+// pastDays = 60;
+// pastDays = 120;
 
-function getTestDates() {
-  const today = new Date;
-
-  const pastDays = 2;
-
-  const daysSinceNewInternet = (
-    (
-      (new Date(today.getFullYear(), today.getMonth(), today.getDate()))
-        .valueOf() / 1000 / 60 / 60 / 24
-    ) - (
-      (new Date('2020-10-23')
-        .valueOf() / 1000 / 60 / 60 / 24)
-    )
-  );
-  // const daysInPast = daysSinceNewInternet + 30;
-  // const daysInPast = 1;
-  const daysInPast = 15;
-  // const daysInPast = 60;
-  // const daysInPast = 187;
-  // const daysInPast = 185;
-  // const daysInPast = 200;
-  // const pastMs = Date.now() - ((1000 * 60 * 60 * 24) * pastDays);
-
-
-  const maxDate = new Date(
-    today.getFullYear(),
-    today.getMonth(),
-    today.getDate() - daysInPast,
-  );
-  const minDate = new Date(
-    maxDate.getFullYear(),
-    maxDate.getMonth(),
-    maxDate.getDate() - pastDays,
-  );
-  return {
-    today,
-    maxDate,
-    minDate,
-  };
-}
+// daysInPast = daysSinceNewInternet + 3;
+// daysInPast = daysSinceNewInternet + 30;
+daysInPast = 0;
+// daysInPast = 3;
+// daysInPast = 30;
 
 function testFilterMeta(_hashLogMeta: _HashLogMetaValue[], minDate: Date): _HashLogMetaValue[] {
   if(USE_TEST_DATES === false) {
@@ -81,22 +62,13 @@ function testFilterPathDates(csvPathDates: CsvPathDate[], minDate: Date, maxDate
 }
 
 export async function convertCsvLogs() {
-  let csvPaths: string[], csvPathDates: CsvPathDate[];
+  let csvPathDates: CsvPathDate[];
   let convertTimer: Timer;
-  let startMs: number, endMs: number, deltaMs: number, deltaSeconds: number,
-    deltaMinutes: number;
+  let deltaMs: number, deltaSeconds: number, deltaMinutes: number;
   let _hashLogMeta: _HashLogMetaValue[];
   let fileHashTuples: [ string, string ][];
 
-  csvPaths = await listDir(CSV_PING_LOG_DIR);
-  _hashLogMeta = await CsvLogMeta.getLogHashMeta();
-
-  const testDates = getTestDates();
-  _hashLogMeta = testFilterMeta(_hashLogMeta, testDates.minDate);
-
-  csvPathDates = getCsvPathDates(csvPaths, _hashLogMeta);
-
-  csvPathDates = testFilterPathDates(csvPathDates, testDates.minDate, testDates.maxDate);
+  [ csvPathDates, _hashLogMeta ] = await getCsvPathDatesAndMeta();
 
   const csvPathFileSum = csvPathDates.reduce((acc, curr) => {
     return acc + curr.csvPaths.length;
@@ -137,9 +109,11 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
   let fileHashTuples: [ string, string ][];
   let convertRecordReadCount: number;
   let convertLogTimesMs: number[], readLogTimesMs: number[];
+  let fileRecordCounts: number[];
   convertRecordReadCount = 0;
   convertLogTimesMs = [];
   readLogTimesMs = [];
+  fileRecordCounts = [];
   //filter path dates with no files to convertz
   csvPathDates = csvPathDates.filter(csvPathDate => {
     return csvPathDate.csvPaths.length > 0;
@@ -151,14 +125,14 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
   fileDoneCount = 0;
   totalFiles = csvPathDates.reduce((acc, curr) => {
     return acc + curr.csvPaths.length;
-  }, 0);
+  }, 0) + csvPathDates.reduce((acc, curr) => acc + 1, 0);
   await initializePool();
   for(let i = 0, csvPathDate: CsvPathDate; csvPathDate = csvPathDates[i], i < csvPathDates.length; ++i) {
     let csvConvertFileName: string, csvConvertFilePath: string;
     let filePaths: string[], csvWriter: CsvWriter, asyncCsvWriter: AsyncCsvWriter;
     let convertLogJobPromises: Promise<void>[];
     let headers: any[], recordIdCounter: number;
-    let convertTimer: Timer;
+    let convertTimer: Timer, firstRead: boolean;
 
     headers = [
       // 'id',
@@ -184,17 +158,18 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
     asyncCsvWriter = await getAsyncCsvWriter(csvConvertFilePath);
     await asyncCsvWriter.write([ headers ]);
 
+    firstRead = true;
     convertTimer = Timer.start();
 
     for(let k = 0, filePath: string; filePath = filePaths[k], k < filePaths.length; ++k) {
       let convertLogPromise: Promise<void>;
       let readLogTimer: Timer;
+      let staggerMs: number;
 
       if(k !== 0) {
-        // await sleep(32);
-        // await sleep(64);
-        // await sleep(128);
-        // await sleep(256);
+        staggerMs = 16 + Math.round(Math.random() * 16);
+        // staggerMs = 32 + Math.round(Math.random() * 32);
+        await sleep(staggerMs);
       }
       let asyncWrites = 0;
 
@@ -207,6 +182,11 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
 
       const recordStartCb = () => {
         readLogTimer = Timer.start();
+        if(firstRead) {
+          firstRead = false;
+          fileDoneCount++;
+          printProgress(fileDoneCount, totalFiles);
+        }
       };
 
       // readLogTimer = Timer.start();
@@ -230,6 +210,7 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
             }
             readLogTimesMs.push(readLogTimer.stop());
             fileDoneCount++;
+            fileRecordCounts.push(convertLogResult.recordCount);
             recordCount += convertLogResult.recordCount;
             printProgress(fileDoneCount, totalFiles);
           })();
@@ -284,6 +265,11 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
   const avgReadTimeMs = Math.round(sumReadTimeMs / readLogTimesMs.length);
   const [ readTimeVal, readTimeLabel ] = getIntuitiveTimeFromMs(avgReadTimeMs);
   console.log(`avg readLog: ${readTimeVal.toFixed(3)} ${readTimeLabel}`);
+  const sumRecordCounts = fileRecordCounts.reduce((acc, curr) => {
+    return acc + curr;
+  }, 0);
+  const avgFileRecordCount = Math.round(sumRecordCounts / fileRecordCounts.length);
+  console.log(`avg records per file: ${avgFileRecordCount.toLocaleString()}`);
 
   console.log(`\nrecordCount: ${recordCount.toLocaleString()}`);
   const recordsWrotePerSecond = Math.round(recordCount / (sumConvertTimeMs / 1000));
@@ -293,4 +279,39 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
   console.log(`W: ${recordsWrotePerSecond.toLocaleString()} records/second`);
 
   process.stdout.write('\n');
+}
+
+async function getCsvPathDatesAndMeta(): Promise<[ CsvPathDate[], _HashLogMetaValue[] ]> {
+  let csvPaths: string[], _hashLogMeta: _HashLogMetaValue[], csvPathDates: CsvPathDate[];
+  csvPaths = await listDir(CSV_PING_LOG_DIR);
+  _hashLogMeta = await CsvLogMeta.getLogHashMeta();
+
+  const testDates = getTestDates();
+  _hashLogMeta = testFilterMeta(_hashLogMeta, testDates.minDate);
+
+  csvPathDates = getCsvPathDates(csvPaths, _hashLogMeta);
+
+  csvPathDates = testFilterPathDates(csvPathDates, testDates.minDate, testDates.maxDate);
+  return [
+    csvPathDates,
+    _hashLogMeta,
+  ];
+}
+
+function getTestDates() {
+  const maxDate = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate() - daysInPast,
+  );
+  const minDate = new Date(
+    maxDate.getFullYear(),
+    maxDate.getMonth(),
+    maxDate.getDate() - pastDays,
+  );
+  return {
+    today,
+    maxDate,
+    minDate,
+  };
 }

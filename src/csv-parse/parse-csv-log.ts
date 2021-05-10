@@ -6,12 +6,17 @@ export interface CsvLogParseResult {
   numRecords: number;
   parseMs: number;
   aggregator: CsvAggregator;
+  headers: any[];
 }
 
-export async function parseCsvLog(logPath: string): Promise<CsvLogParseResult> {
+export async function parseCsvLog(logPath: string, recordCb?: (record: any[]) => void): Promise<CsvLogParseResult> {
   let numRecords: number, parseMs: number;
   let startMs: number, endMs: number;
   let headers: string[], aggregator: CsvAggregator;
+  if(recordCb === undefined) {
+    recordCb = (record: any[]) => void 0;
+  }
+
   numRecords = 0;
   aggregator = new CsvAggregator();
 
@@ -24,6 +29,7 @@ export async function parseCsvLog(logPath: string): Promise<CsvLogParseResult> {
       )
       || (
         aggregator.aggregate(headers, record),
+        // recordCb(record),
         numRecords++
       )
     );
@@ -42,5 +48,6 @@ export async function parseCsvLog(logPath: string): Promise<CsvLogParseResult> {
     numRecords,
     parseMs,
     aggregator,
+    headers,
   };
 }

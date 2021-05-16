@@ -1,12 +1,10 @@
 
-import path, { ParsedPath } from 'path';
+import path from 'path';
 
 import { readCsvLog, CsvReadResult } from './read-csv-log';
-import { listDir } from '../lib/files';
-import { CONVERTED_CSV_LOGS_DIR_PATH } from '../constants';
 import { printProgress, getIntuitiveTimeFromMs } from '../print';
 import { Timer } from '../lib/timer';
-import { initializePool, destroyWorkers, queueCsvReadJob, NUM_WORKERS } from './worker-pool';
+import { initializePool, destroyWorkers, queueCsvReadJob } from './worker-pool';
 import { sleep } from '../lib/sleep';
 
 const DONE_COUNT_START_MOD = 16;

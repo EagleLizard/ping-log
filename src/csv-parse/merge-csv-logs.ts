@@ -6,12 +6,6 @@ import { ReadAndParseCsvLogsResult, readCsvLogs } from './read-csv-logs';
 import { listDir } from '../lib/files';
 import { CONVERTED_CSV_LOGS_DIR_PATH } from '../constants';
 
-let ASYNC_RECORDS_QUEUE_WINDOW: number;
-let ASYNC_RECORDS_QUEUE_MAX: number;
-
-let PROCESS_ASYNC_MOD: number;
-let PROCESS_ASYNC_WAIT_MS: number;
-
 let LOGS_IN_PAST: number;
 let LOGS_TO_INCLUDE: number;
 

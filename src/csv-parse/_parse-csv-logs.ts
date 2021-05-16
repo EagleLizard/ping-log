@@ -15,7 +15,7 @@ import { getIntuitiveTimeFromMs, printProgress } from '../print';
 import { Timer } from '../lib/timer';
 import { sleep } from '../lib/sleep';
 
-export async function parseCsvLogs() {
+export async function _parseCsvLogs() {
   let csvLogPaths: string[], aggregator: CsvAggregator, csvParseResults: CsvLogParseResult[];
   let startMs: number, endMs: number, deltaMs: number, deltaT: number, deltaLabel: string;
   let recordCount: number, timer: Timer, recordsReadPerSecond: number;

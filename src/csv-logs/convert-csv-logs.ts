@@ -25,12 +25,12 @@ const daysSinceNewInternet = (
 );
 
 let USE_TEST_DATES: boolean, daysInPast: number, pastDays: number;
-// USE_TEST_DATES = false;
-USE_TEST_DATES = true;
+USE_TEST_DATES = false;
+// USE_TEST_DATES = true;
 // pastDays = 3;
-pastDays = 7;
+// pastDays = 7;
 // pastDays = 14;
-// pastDays = 60;
+pastDays = 60;
 // pastDays = 120;
 
 // daysInPast = daysSinceNewInternet + 3;

@@ -55,6 +55,10 @@ export async function readCsvLogs(csvLogPaths: string[], parseRecordCb: (record:
   let stopCheckingAsyncRecords: boolean, processRecordsPrintTimer: number, queueClears: number, processAsyncCallCount: number;
   let recordCb: (record: any[]) => void;
 
+  console.log(`ASYNC_RECORDS_QUEUE_MAX: ${ASYNC_RECORDS_QUEUE_MAX}`);
+  console.log(`ASYNC_RECORDS_QUEUE_WINDOW: ${ASYNC_RECORDS_QUEUE_WINDOW}`);
+  console.log(`PROCESS_ASYNC_WAIT_MS: ${PROCESS_ASYNC_WAIT_MS}\nPROCESS_ASYNC_MOD: ${PROCESS_ASYNC_MOD}`);
+
   console.log(`Total paths: ${csvLogPaths.length}`);
   const logPathFileNames = csvLogPaths.map(logPath => path.parse(logPath).name);
   console.log(logPathFileNames.join(', '));

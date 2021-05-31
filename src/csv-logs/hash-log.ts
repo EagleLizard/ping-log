@@ -8,7 +8,7 @@ import _chunk from 'lodash.chunk';
 import { CsvPathDate } from '../lib/date-time-util';
 import { printProgress } from '../print';
 import { _HashLogMetaValue } from './csv-log-meta';
-import { queueHashJob, initializePool } from '../csv-parse/worker-pool';
+import { queueHashJob, initializePool } from '../worker-pool/worker-pool';
 import { sleep } from '../lib/sleep';
 
 export interface HashLogResult {

@@ -7,7 +7,7 @@ import { printProgress, getIntuitiveTimeFromMs } from '../print';
 import { CsvPathDate, getCsvPathDates, isDateInRange } from '../lib/date-time-util';
 import { getHashesConcurrent } from './hash-log';
 import { CsvLogMeta, _HashLogMetaValue } from './csv-log-meta';
-import { initializePool, destroyWorkers, queueConvertCsvLog, AsyncCsvWriter, getAsyncCsvWriter, } from '../csv-parse/worker-pool';
+import { initializePool, destroyWorkers, queueConvertCsvLog, AsyncCsvWriter, getAsyncCsvWriter, } from '../worker-pool/worker-pool';
 import { sleep, sleepImmediate } from '../lib/sleep';
 import { Timer } from '../lib/timer';
 

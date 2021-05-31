@@ -6,13 +6,13 @@ import { Worker, isMainThread, parentPort } from 'worker_threads';
 import os from 'os';
 
 import { sleep } from '../lib/sleep';
-import { CsvLogParseResult, parseCsvLog } from './parse-csv-log';
+import { CsvLogParseResult, parseCsvLog } from '../csv-parse/parse-csv-log';
 import { convertCsvPathDate, CsvConvertResult } from '../csv-logs/convert-csv-path-date';
 import { CsvPathDate } from '../lib/date-time-util';
 import { CsvLogConvertResult, convertCsvLogFile } from '../csv-logs/convert-csv-log';
 import { getFileHash, HashLogResult } from '../csv-logs/hash-log';
 import { CsvWriter, writeCsv } from '../lib/csv-writer';
-import { CsvReadResult, readCsvLog } from './read-csv-log';
+import { CsvReadResult, readCsvLog } from '../csv-parse/read-csv-log';
 
 const NUM_CPUS = os.cpus().length;
 export const NUM_WORKERS = Math.round(

@@ -4,7 +4,7 @@ import path from 'path';
 import { readCsvLog, CsvReadResult } from './read-csv-log';
 import { printProgress, getIntuitiveTimeFromMs } from '../print';
 import { Timer } from '../lib/timer';
-import { initializePool, destroyWorkers, queueCsvReadJob } from './worker-pool';
+import { initializePool, destroyWorkers, queueCsvReadJob } from '../worker-pool/worker-pool';
 import { sleep } from '../lib/sleep';
 
 const DONE_COUNT_START_MOD = 16;

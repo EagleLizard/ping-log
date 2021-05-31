@@ -10,7 +10,7 @@ import { listDir } from '../lib/files';
 import { CsvAggregator } from '../csv-logs/csv-aggregator';
 // import { analyzeCsvLogs } from './analyze-csv-logs';
 import { CsvLogParseResult, parseCsvLog } from './parse-csv-log';
-import { destroyWorkers, initializePool, queueParseCsv } from './worker-pool';
+import { destroyWorkers, initializePool, queueParseCsv } from '../worker-pool/worker-pool';
 import { getIntuitiveTimeFromMs, printProgress } from '../print';
 import { Timer } from '../lib/timer';
 import { sleep } from '../lib/sleep';

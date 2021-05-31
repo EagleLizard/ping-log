@@ -7,9 +7,10 @@ import { printProgress, getIntuitiveTimeFromMs } from '../print';
 import { CsvPathDate, getCsvPathDates, isDateInRange } from '../lib/date-time-util';
 import { getHashesConcurrent } from './hash-log';
 import { CsvLogMeta, _HashLogMetaValue } from './csv-log-meta';
-import { initializePool, destroyWorkers, queueConvertCsvLog, AsyncCsvWriter, getAsyncCsvWriter, } from '../worker-pool/worker-pool';
+import { initializePool, destroyWorkers, queueConvertCsvLog, getAsyncCsvWriter, } from '../worker-pool/worker-pool';
 import { sleep, sleepImmediate } from '../lib/sleep';
 import { Timer } from '../lib/timer';
+import { AsyncCsvWriter } from '../worker-pool/main-thread-handlers';
 
 const USE_EXT_DIR = false;
 const today = new Date;

@@ -1,4 +1,6 @@
 
+import os from 'os';
+
 export enum MESSAGE_TYPES {
   ACK = 'ack',
   EXIT = 'exit',
@@ -22,6 +24,22 @@ export enum MESSAGE_TYPES {
   ASYNC_CSV_READ = 'async_csv_read',
 }
 
+const NUM_CPUS = os.cpus().length;
+export const NUM_WORKERS = Math.round(
+  // 1
+  // 2
+  // NUM_CPUS - 2
+  // NUM_CPUS - 1
+  // NUM_CPUS
+  NUM_CPUS / Math.LOG2E
+  // NUM_CPUS / 2
+  // NUM_CPUS / 4
+  // NUM_CPUS * 2
+  // NUM_CPUS * 4
+  // NUM_CPUS * 8
+  // NUM_CPUS - 2
+);
+
 export const ASYNC_READ_RECORD_QUEUE_SIZE = Math.round(
   // 0.128e3
   // 0.256e3
@@ -36,4 +54,12 @@ export const ASYNC_READ_RECORD_QUEUE_SIZE = Math.round(
   // 8.056e4
   // 1.6384e4
   // 1.024e5
+);
+
+export const MAX_CSV_WRITERS = Math.floor(
+  // 1
+  // 2
+  // 3
+  // NUM_WORKERS / 2
+  NUM_WORKERS / 1.5
 );

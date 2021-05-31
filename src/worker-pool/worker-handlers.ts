@@ -63,6 +63,12 @@ export function handleConvertCsv(msg: WorkerMessage) {
   }
 }
 
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+v v v v v v v v v v v v v v v v v v v v v
+
+*/
+
 export function handleCsvRead(msg: WorkerMessage) {
   let recordCb: (record: any[], idx: number) => void;
   const readCsvPath = (msg?.data?.csvPath as string);
@@ -115,6 +121,12 @@ export function handleCsvWriter(msg: WorkerMessage) {
     })
   }
 }
+
+/*
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+v v v v v v v v v v v v v v v v v v v v v
+
+*/
 
 export function handleCsvWriterEnd(msg: WorkerMessage) {
   if(asyncCsvWriter !== undefined) {

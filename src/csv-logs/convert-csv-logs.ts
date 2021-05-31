@@ -7,7 +7,6 @@ import { printProgress, getIntuitiveTimeFromMs } from '../print';
 import { CsvPathDate, getCsvPathDates, isDateInRange } from '../lib/date-time-util';
 import { getHashesConcurrent } from './hash-log';
 import { CsvLogMeta, _HashLogMetaValue } from './csv-log-meta';
-import { CsvWriter } from '../lib/csv-writer';
 import { initializePool, destroyWorkers, queueConvertCsvLog, AsyncCsvWriter, getAsyncCsvWriter, } from '../csv-parse/worker-pool';
 import { sleep, sleepImmediate } from '../lib/sleep';
 import { Timer } from '../lib/timer';
@@ -25,13 +24,19 @@ const daysSinceNewInternet = (
 );
 
 let USE_TEST_DATES: boolean, daysInPast: number, pastDays: number;
-USE_TEST_DATES = false;
-// USE_TEST_DATES = true;
+// USE_TEST_DATES = false;
+USE_TEST_DATES = true;
+
 // pastDays = 3;
-// pastDays = 7;
+// pastDays = 6;
+pastDays = 7;
+// pastDays = 12;
 // pastDays = 14;
-pastDays = 60;
+// pastDays = 20;
+// pastDays = 30;
+// pastDays = 60;
 // pastDays = 120;
+// pastDays = 240;
 
 // daysInPast = daysSinceNewInternet + 3;
 // daysInPast = daysSinceNewInternet + 30;
@@ -77,7 +82,6 @@ export async function convertCsvLogs() {
   console.log(`Total pathDates: ${csvPathDates.length}`);
   console.log(csvPathDates.map(csvPathDate => csvPathDate.dateStr).join(', '));
 
-  // fileHashTuples = await getHashes(csvPathDates, _hashLogMeta);
   fileHashTuples = await getHashesConcurrent(csvPathDates, _hashLogMeta);
   csvPathDates = CsvLogMeta.filterHashedCsvPathDates(csvPathDates, _hashLogMeta, fileHashTuples);
   const filteredCsvFileSum = csvPathDates.reduce((acc, curr) => {
@@ -110,6 +114,11 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
   let convertRecordReadCount: number;
   let convertLogTimesMs: number[], readLogTimesMs: number[];
   let fileRecordCounts: number[];
+  let allWriterPromises: Promise<void>[];
+  let timer: Timer;
+
+  allWriterPromises = [];
+
   convertRecordReadCount = 0;
   convertLogTimesMs = [];
   readLogTimesMs = [];
@@ -120,22 +129,24 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
   });
 
   fileHashTuples = [];
-  // doneCount = 0;
   recordCount = 0;
   fileDoneCount = 0;
   totalFiles = csvPathDates.reduce((acc, curr) => {
     return acc + curr.csvPaths.length;
   }, 0) + csvPathDates.reduce((acc, curr) => acc + 1, 0);
+
   await initializePool();
+
+  timer = Timer.start();
+
   for(let i = 0, csvPathDate: CsvPathDate; csvPathDate = csvPathDates[i], i < csvPathDates.length; ++i) {
     let csvConvertFileName: string, csvConvertFilePath: string;
-    let filePaths: string[], csvWriter: CsvWriter, asyncCsvWriter: AsyncCsvWriter;
+    let filePaths: string[], asyncCsvWriter: AsyncCsvWriter;
     let convertLogJobPromises: Promise<void>[];
-    let headers: any[], recordIdCounter: number;
+    let headers: any[];
     let convertTimer: Timer, firstRead: boolean;
 
     headers = [
-      // 'id',
       'time_stamp',
       'uri',
       'ping_ms'
@@ -150,10 +161,6 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
 
     filePaths = csvPathDate.csvPaths;
     convertLogJobPromises = [];
-    recordIdCounter = 0;
-
-    // csvWriter = new CsvWriter(csvConvertFilePath);
-    // csvWriter.write(headers);
 
     asyncCsvWriter = await getAsyncCsvWriter(csvConvertFilePath);
     await asyncCsvWriter.write([ headers ]);
@@ -164,13 +171,7 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
     for(let k = 0, filePath: string; filePath = filePaths[k], k < filePaths.length; ++k) {
       let convertLogPromise: Promise<void>;
       let readLogTimer: Timer;
-      let staggerMs: number;
 
-      if(k !== 0) {
-        staggerMs = 16 + Math.round(Math.random() * 16);
-        // staggerMs = 32 + Math.round(Math.random() * 32);
-        await sleep(staggerMs);
-      }
       let asyncWrites = 0;
 
       const recordsCb = async (records: any[][]) => {
@@ -189,8 +190,6 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
         }
       };
 
-      // readLogTimer = Timer.start();
-
       convertLogPromise = queueConvertCsvLog(filePath, recordsCb, recordStartCb)
         .then(convertLogResult => {
           fileHashTuples.push([
@@ -199,13 +198,7 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
           ]);
           return (async () => {
 
-            // for(let m = 0; m < convertLogResult.records.length; ++m) {
-            //   await csvWriter.write(convertLogResult.records[m]);
-            //   delete convertLogResult.records[m];
-            // }
             while(asyncWrites > 0) {
-              // console.log(`asyncWrites: ${asyncWrites}`);
-              // await sleep(0);
               await sleepImmediate();
             }
             readLogTimesMs.push(readLogTimer.stop());
@@ -218,15 +211,18 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
       convertLogJobPromises.push(convertLogPromise);
 
     }
-    await Promise.all(convertLogJobPromises);
-
-    // await csvWriter.end();
-
-    await asyncCsvWriter.end();
-
-    convertLogTimesMs.push(convertTimer.stop());
+    allWriterPromises.push(
+      Promise.all(convertLogJobPromises).then(() => {
+        convertLogTimesMs.push(convertTimer.stop());
+        return asyncCsvWriter.end();
+      })
+    );
 
   }
+
+  await Promise.all(allWriterPromises);
+
+  const deltaMs = timer.stop();
 
   fileHashTuples.forEach(fileHashTuple => {
     let foundHashMetaVal: _HashLogMetaValue;
@@ -272,10 +268,11 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
   console.log(`avg records per file: ${avgFileRecordCount.toLocaleString()}`);
 
   console.log(`\nrecordCount: ${recordCount.toLocaleString()}`);
-  const recordsWrotePerSecond = Math.round(recordCount / (sumConvertTimeMs / 1000));
-  const recordsReadPerSecond = Math.round(recordCount / (sumReadTimeMs / 1000));
+  const recordsWrotePerSecond = Math.round(recordCount / (deltaMs / 1000));
+  
+
   process.stdout.write('\n');
-  console.log(`R: ${recordsReadPerSecond.toLocaleString()} records/second`);
+
   console.log(`W: ${recordsWrotePerSecond.toLocaleString()} records/second`);
 
   process.stdout.write('\n');

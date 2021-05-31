@@ -12,7 +12,7 @@ import { CsvPathDate } from '../lib/date-time-util';
 import { CsvLogConvertResult, convertCsvLogFile } from '../csv-logs/convert-csv-log';
 import { getFileHash, HashLogResult } from '../csv-logs/hash-log';
 import { CsvWriter, writeCsv } from '../lib/csv-writer';
-import { CsvReadResult, readCsvLog } from '../csv-parse/read-csv-log';
+import { CsvReadResult, readCsvLog } from './read-csv-log';
 
 const NUM_CPUS = os.cpus().length;
 export const NUM_WORKERS = Math.round(
@@ -33,16 +33,25 @@ export const NUM_WORKERS = Math.round(
 const ASYNC_READ_RECORD_QUEUE_SIZE = Math.round(
   // 0.128e3
   // 0.256e3
-  // 0.512e3
-  // 1.024e3
-  // 2.048e3
-  // 4.096e3
-  8.192e3
+  // 512
+  // 1024
+  // 2048
+  // 4096
+  // 8192
+
+  1.024e4
+  // 4.028e4
+  // 8.056e4
   // 1.6384e4
-  // 3.2768e4
-  // 4.9152e4
-  // 6.5536e4
-  // 1.31072e5
+  // 1.024e5
+);
+
+const MAX_CSV_WRITERS = Math.floor(
+  // 1
+  // 2
+  // 3
+  // NUM_WORKERS / 2
+  NUM_WORKERS / 1.5
 );
 
 enum MESSAGE_TYPES {
@@ -57,6 +66,7 @@ enum MESSAGE_TYPES {
   CONVERT_CSV_LOG = 'convert_csv_log',
   CONVERT_CSV_LOG_COMPLETE = 'convert_csv_log_complete',
   CONVERT_CSV_LOG_RECORD_READ = 'convert_csv_log_record_read',
+  CSV_WRITER = 'csv_writer',
   CSV_WRITER_INIT = 'csv_writer_init',
   CSV_WRITER_WRITE = 'csv_writer_write',
   CSV_WRITER_WRITE_DONE = 'csv_writer_write_done',
@@ -73,6 +83,22 @@ let availableWorkers: Worker[] = [];
 
 let asyncCsvWriterWorker: Worker;
 let asyncCsvWriter: CsvWriter;
+
+type CsvWriterJobTuple = [
+  string,
+  (csvPath: string) => void, // resolver
+  () => Worker, // running worker
+];
+
+type CsvWriterWriteJobTuple = [
+  string, // path
+  any[][], // records
+  () => void, // resolver
+];
+
+let csvWriterQueue: CsvWriterJobTuple[] = [];
+let runningCsvWriterJobs: CsvWriterJobTuple[] = [];
+let csvWriterWriteQueue: CsvWriterWriteJobTuple[] = [];
 
 let hashQueue: [ string, (hashResult: HashLogResult) => void ][] = [];
 let runningHashJobs: [ string, (hashResult: HashLogResult) => void ][] = [];
@@ -112,8 +138,6 @@ let runningCsvWriteJobs: [ string, any[][], (err?:any) => void ][] = [];
 let isInitialized = false;
 let areWorkersDestroyed = false;
 
-let convertRecordReadCount = 0;
-
 export interface AsyncCsvWriter {
   write: (records: any[][]) => Promise<void>;
   end: () => Promise<void>;
@@ -128,35 +152,30 @@ if(!isMainThread) {
   initWorkerThread();
 }
 
-// (async () => {
-//   try {
-//     // await initializePool();
-//   } catch(e) {
-//     console.error(e);
-//     throw e;
-//   }
-// })();
-
 export async function getAsyncCsvWriter(filePath: string): Promise<AsyncCsvWriter> {
   let isWriting: boolean;
-  while(availableWorkers.length < 1) {
-    await sleep(1);
-  }
-  asyncCsvWriterWorker = availableWorkers.pop();
-  asyncCsvWriterWorker.postMessage({
-    messageType: MESSAGE_TYPES.CSV_WRITER_INIT,
-    data: {
-      filePath,
-    }
+  let writerJobIdx: number, writerJob: CsvWriterJobTuple, writerWorker: Worker;
+
+  await queueCsvWriterJob(filePath);
+  writerJobIdx = runningCsvWriterJobs.findIndex(csvWriterJob => {
+    return csvWriterJob[0] === filePath;
   });
-  await new Promise<void>((resolve, reject) => {
-    asyncCsvWriterWorker.once('message', msg => {
-      if(msg?.messageType === MESSAGE_TYPES.CSV_WRITER_INIT) {
+  if(writerJobIdx === -1) {
+    throw new Error(`Error finding job for ${filePath}`);
+  }
+  writerJob = runningCsvWriterJobs[writerJobIdx];
+  writerWorker = writerJob[2]();
+
+  if(writerWorker === undefined) {
+    throw new Error(`undefined worker for job ${filePath}`);
+  }
+  await new Promise<void>(resolve => {
+    let foundRunningJobIdx: number;
+    writerWorker.once('message', msg => {
+      if(msg?.messageType === MESSAGE_TYPES.CSV_WRITER) {
         resolve();
-      } else {
-        reject(msg);
       }
-    });
+    })
   });
 
   isWriting = false;
@@ -170,16 +189,18 @@ export async function getAsyncCsvWriter(filePath: string): Promise<AsyncCsvWrite
     while(isWriting) {
       await sleep(0);
     }
+
     isWriting = true;
-    asyncCsvWriterWorker.postMessage({
+
+    writerWorker.postMessage({
       messageType: MESSAGE_TYPES.CSV_WRITER_WRITE,
       data: {
         records,
       },
     });
-    // records.length = 0;
+
     await new Promise<void>(resolve => {
-      asyncCsvWriterWorker.once('message', msg => {
+      writerWorker.once('message', msg => {
         if(msg?.messageType === MESSAGE_TYPES.CSV_WRITER_WRITE_DONE) {
           isWriting = false;
           resolve();
@@ -189,19 +210,41 @@ export async function getAsyncCsvWriter(filePath: string): Promise<AsyncCsvWrite
   }
 
   async function end() {
-    asyncCsvWriterWorker.postMessage({
+    writerWorker.postMessage({
       messageType: MESSAGE_TYPES.CSV_WRITER_END,
     });
     return new Promise<void>(resolve => {
-      asyncCsvWriterWorker.once('message', msg => {
+      writerWorker.once('message', msg => {
+        let runningWriterIdx: number;
+        
         if(msg?.messageType === MESSAGE_TYPES.CSV_WRITER_END) {
-          availableWorkers.push(asyncCsvWriterWorker);
-          asyncCsvWriterWorker = undefined;
+          runningWriterIdx = runningCsvWriterJobs.findIndex(csvWriterJob => {
+            return csvWriterJob[0] === filePath;
+          });
+          if(runningWriterIdx === -1) {
+            throw new Error(`cannot find job to stop: ${filePath}`);
+          }
+          runningCsvWriterJobs.splice(runningWriterIdx, 1);
+
+          addWorker(writerWorker);
           resolve();
         }
       });
     });
   }
+}
+
+function queueCsvWriterJob(targetCsvPath: string) {
+  return new Promise<string>((resolve, reject) => {
+    const resolver = (csvPath: string) => {
+      resolve(csvPath);
+    };
+    csvWriterQueue.push([
+      targetCsvPath,
+      resolver,
+      () => undefined,
+    ]);
+  });
 }
 
 export function queueHashJob(filePath: string) {
@@ -248,18 +291,6 @@ export function queueConvertCsvLog(csvPath: string, recordsCb: (records: any[][]
       resolver,
       recordsCb,
       readStartCb,
-    ]);
-  });
-}
-export function queueCsvWriteJob(targetCsvPath: string, rows: any[][]) {
-  return new Promise<any>((resolve, reject) => {
-    const resolver = (err?:any) => {
-      resolve(err);
-    };
-    csvWriteQueue.push([
-      targetCsvPath,
-      rows,
-      resolver,
     ]);
   });
 }
@@ -316,6 +347,7 @@ async function initMainThread() {
   console.log('initializing main thread');
   console.log(`NUM_WORKERS: ${NUM_WORKERS}`);
   console.log(`ASYNC_READ_RECORD_QUEUE_SIZE: ${ASYNC_READ_RECORD_QUEUE_SIZE.toLocaleString()}`);
+  console.log(`MAX_CSV_WRITERS: ${MAX_CSV_WRITERS}`)
   for(let i = 0; i < NUM_WORKERS; ++i) {
     let worker: Worker;
     worker = new Worker(__filename);
@@ -354,11 +386,15 @@ async function initMainThread() {
       let foundCsvReadLogJob: ReadCsvJobTuple;
       let foundCsvReadLogJobIdx: number;
 
+      let foundCsvWriterJob: CsvWriterJobTuple;
+      let foundCsvWriterJobIdx: number;
+
       messageType = msg?.messageType;
       if(messageType === undefined) {
         console.error('malformed message in main from worker:');
         console.error(msg);
       }
+
       switch(messageType) {
         case MESSAGE_TYPES.PARSE_CSV_COMPLETE:
           let foundParseJobIdx: number;
@@ -412,6 +448,15 @@ async function initMainThread() {
             foundCsvReadLogJob[3](msg?.data?.records);
           }
           break;
+        case MESSAGE_TYPES.CSV_WRITER:
+          foundCsvWriterJobIdx = runningCsvWriterJobs.findIndex(writerJob => {
+            return writerJob[0] === msg?.data?.csvPath;
+          });
+          if(foundCsvWriterJobIdx !== -1) {
+            foundCsvWriterJob = runningCsvWriterJobs[foundCsvWriterJobIdx];
+            foundCsvWriterJob[1](msg?.data?.csvPath);
+          }
+        
         /*
 
         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -502,13 +547,11 @@ function checkQueues(queueLoop?: boolean) {
   ];
   let hashLogJob: [ string, (hashResult: HashLogResult) => void ];
   let csvWriteJob: [ string, any[][], (err?: any) => void];
+  let csvWriterJob: CsvWriterJobTuple;
   let csvReadJob: ReadCsvJobTuple;
   let readStartCb: () => void;
+
   if(availableWorkers.length > 0) {
-    if(!queueLoop) {
-      // console.log(`availableWOrkers: ${availableWorkers.length}`);
-      // console.log(`convertQueue: ${convertLogQueue.length}`);
-    }
     while((availableWorkers.length > 0) && (parseQueue.length > 0)) {
       availableWorker = removeWorker();
       parseJob = parseQueue.shift();
@@ -531,7 +574,10 @@ function checkQueues(queueLoop?: boolean) {
         },
       });
     }
-    while((availableWorkers.length > 0) && (convertLogQueue.length > 0)) {
+    while(
+      (availableWorkers.length > 0)
+      && (convertLogQueue.length > 0)
+    ) {
       availableWorker = removeWorker();
       convertLogJob = convertLogQueue.shift();
       runningConvertLogJobs.push(convertLogJob);
@@ -567,6 +613,23 @@ function checkQueues(queueLoop?: boolean) {
         data: {
           targetCsvPath: csvWriteJob[0],
           rows: csvWriteJob[1],
+        },
+      });
+    }
+    while(
+      (availableWorkers.length > 0)
+        && (csvWriterQueue.length > 0)
+        && (runningCsvWriterJobs.length < MAX_CSV_WRITERS)
+      ) {
+      availableWorker = removeWorker();
+      csvWriterJob = csvWriterQueue.shift();
+      csvWriterJob[2] = () => availableWorker;
+      runningCsvWriterJobs.push(csvWriterJob);
+      csvWriterJob[1](csvWriterJob[0]);
+      availableWorker.postMessage({
+        messageType: MESSAGE_TYPES.CSV_WRITER,
+        data: {
+          csvPath: csvWriterJob[0],
         },
       });
     }
@@ -674,6 +737,21 @@ function initWorkerThread() {
           });
         }
         break;
+      case MESSAGE_TYPES.CSV_WRITER:
+        const csvWriterPath = (msg?.data?.csvPath as string);
+        if(csvWriterPath === undefined) {
+          console.error('Error, malformed message sent to worker:');
+          console.error(msg);
+        } else {
+          asyncCsvWriter = new CsvWriter(csvWriterPath);
+          parentPort.postMessage({
+            messageType: MESSAGE_TYPES.CSV_WRITER,
+            data: {
+              csvPath: csvWriterPath,
+            },
+          })
+        }
+        break;
       /*
 
       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -731,20 +809,25 @@ function initWorkerThread() {
         } else {
           const recordQueue: any[][] = [];
           const clearRecordQueue = () => {
+            let recordQueueCopy: any[][];
+            recordQueueCopy = recordQueue.slice();
             parentPort.postMessage({
               messageType: MESSAGE_TYPES.CONVERT_CSV_LOG_RECORD_READ,
               data: {
                 filePath,
-                records: recordQueue.slice(),
+                records: recordQueueCopy,
               },
             });
             recordQueue.length = 0;
           };
+          const checkClear = () => {
+            if(recordQueue.length > ASYNC_READ_RECORD_QUEUE_SIZE) {
+              return clearRecordQueue();
+            }
+          };
           const recordCb = (record: any[]) => {
             recordQueue.push(record);
-            if(recordQueue.length > ASYNC_READ_RECORD_QUEUE_SIZE) {
-              clearRecordQueue();
-            }
+            checkClear();
           };
           sleep(0).then(() => {
             return convertCsvLogFile(filePath, recordCb)

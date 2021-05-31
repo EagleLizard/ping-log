@@ -9,15 +9,13 @@ import { CONVERTED_CSV_LOGS_DIR_PATH } from '../constants';
 let LOGS_IN_PAST: number;
 let LOGS_TO_INCLUDE: number;
 
-// RECORD_QUEUE_MAX = 512;
-
-// LOGS_IN_PAST = 0;
+LOGS_IN_PAST = 0;
 // LOGS_IN_PAST = 30;
 // LOGS_IN_PAST = 100;
 // LOGS_IN_PAST = 140;
 // LOGS_IN_PAST = 190;
 // LOGS_IN_PAST = 200;
-LOGS_IN_PAST = 230;
+// LOGS_IN_PAST = 230;
 // LOGS_IN_PAST = 292;
 // LOGS_IN_PAST = 300;
 
@@ -39,7 +37,6 @@ export async function mergeCsvLogs() {
   csvLogPaths = await listDir(CONVERTED_CSV_LOGS_DIR_PATH);
   csvLogPaths = sortCsvLogPaths(csvLogPaths);
 
-  // console.log(`startCsvLogsSlice: ${startCsvLogsSlice}\nendCsvLogsSlice: ${endCsvLogsSlice}`);
   csvLogPaths = filterCsvPathsByDate(csvLogPaths);
 
   process.stdout.write('\n');
@@ -54,11 +51,6 @@ export async function mergeCsvLogs() {
       headers = record;
     } else {
       if(isValidRecord(record)) {
-        // record = [
-        //   +record[0],
-        //   record[1],
-        //   +record[2]
-        // ];
         uri = record[1];
         if(!uriMap.has(uri)) {
           uriMap.set(uri, 0);
@@ -74,10 +66,6 @@ export async function mergeCsvLogs() {
   readAndParseResult = await readCsvLogs(csvLogPaths, parseRecordCb);
 
   [ deltaT, deltaLabel ] = getIntuitiveTimeFromMs(readAndParseResult.deltaMs);
-
-  if(headers !== undefined) {
-    // process.stdout.write(`\nHeaders: [ ${headers.join(', ')} ]`);
-  }
   // printUriMap(uriMap);
 
   process.stdout.write(`\nRead took ${deltaT.toFixed(2)} ${deltaLabel}`);
@@ -155,15 +143,7 @@ function filterCsvPathsByDate(csvLogPaths: string[]) {
   today = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   pastDateStart = new Date(today.getFullYear(), today.getMonth(), today.getDate() - LOGS_IN_PAST);
   pastDateEnd = new Date(today.getFullYear(), today.getMonth(), (today.getDate() - LOGS_IN_PAST) - LOGS_TO_INCLUDE);
-  // if(LOGS_IN_PAST < LOGS_TO_INCLUDE) {
-  //   LOGS_IN_PAST = LOGS_TO_INCLUDE + 1;
-  // }
-  // console.log('today');
-  // console.log(today);
-  // console.log('pastDateEnd');
-  // console.log(pastDateEnd);
-  // console.log('pastDateStart');
-  // console.log(pastDateStart);
+
   logPathDateTuples = csvLogPaths.map(logPath => {
     let parsedPath: ParsedPath, logName: string;
     let splatDate: number[], day: number, month: number, year: number;
@@ -178,6 +158,7 @@ function filterCsvPathsByDate(csvLogPaths: string[]) {
       logDate,
     ];
   });
+
   logPathDateTuples = logPathDateTuples.filter(logDateTuple => {
     let logDate: Date;
     logDate = logDateTuple[1];
@@ -185,6 +166,7 @@ function filterCsvPathsByDate(csvLogPaths: string[]) {
       && (logDate < pastDateStart)
     ;
   });
+
   filteredLogPaths = logPathDateTuples.map(logDateTuple => logDateTuple[0]);
   return filteredLogPaths;
 }

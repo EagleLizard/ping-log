@@ -16,4 +16,8 @@ export class Timer {
     this.deltaMs = this.endMs - this.startMs;
     return this.deltaMs;
   }
+
+  current(): number {
+    return Date.now() - this.startMs;
+  }
 }

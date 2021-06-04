@@ -3,7 +3,6 @@ import { parentPort } from 'worker_threads';
 
 import {
   MESSAGE_TYPES,
-  ASYNC_READ_RECORD_QUEUE_SIZE,
 } from './worker-constants';
 import { WorkerMessage } from './worker-message';
 import { CsvWriter, writeCsv } from '../lib/csv-writer';
@@ -14,6 +13,24 @@ import { CsvPathDate } from '../lib/date-time-util';
 import { readCsvLog } from '../csv-parse/read-csv-log';
 import { convertCsvLogFile } from '../csv-logs/convert-csv-log';
 import { getFileHash } from '../csv-logs/hash-log';
+
+export const ASYNC_READ_RECORD_QUEUE_SIZE = Math.round(
+  // 0.128e3
+  // 0.256e3
+  // 512
+  // 1024
+  // 2048
+  // 4096
+  // 8192
+
+  // 1.024e4
+  1.6384e4
+  // 2.048e4
+  // 4.028e4
+  // 8.056e4
+  // 1.6384e4
+  // 1.024e5
+);
 
 let asyncCsvWriter: CsvWriter;
 

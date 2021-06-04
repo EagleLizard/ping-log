@@ -28,10 +28,11 @@ const NUM_CPUS = os.cpus().length;
 export const NUM_WORKERS = Math.round(
   // 1
   // 2
+  3
   // NUM_CPUS - 2
   // NUM_CPUS - 1
   // NUM_CPUS
-  NUM_CPUS / Math.LOG2E
+  // NUM_CPUS / Math.LOG2E
   // NUM_CPUS / 2
   // NUM_CPUS / 4
   // NUM_CPUS * 2
@@ -40,26 +41,11 @@ export const NUM_WORKERS = Math.round(
   // NUM_CPUS - 2
 );
 
-export const ASYNC_READ_RECORD_QUEUE_SIZE = Math.round(
-  // 0.128e3
-  // 0.256e3
-  // 512
-  // 1024
-  // 2048
-  // 4096
-  // 8192
-
-  1.024e4
-  // 4.028e4
-  // 8.056e4
-  // 1.6384e4
-  // 1.024e5
-);
-
 export const MAX_CSV_WRITERS = Math.floor(
   // 1
   // 2
   // 3
   // NUM_WORKERS / 2
   NUM_WORKERS / 1.5
+  // NUM_WORKERS / Math.LOG2E
 );

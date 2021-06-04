@@ -8,7 +8,6 @@ import { sleep } from '../lib/sleep';
 
 import {
   MESSAGE_TYPES,
-  ASYNC_READ_RECORD_QUEUE_SIZE,
   MAX_CSV_WRITERS,
   NUM_WORKERS,
 } from './worker-constants';
@@ -33,6 +32,7 @@ import {
   handleCsvWriteComplete,
 } from './main-thread-handlers';
 import {
+  ASYNC_READ_RECORD_QUEUE_SIZE,
   handleAck,
   handleConvertCsv,
   handleConvertCsvLog,

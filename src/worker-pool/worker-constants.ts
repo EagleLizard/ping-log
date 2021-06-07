@@ -28,11 +28,11 @@ const NUM_CPUS = os.cpus().length;
 export const NUM_WORKERS = Math.round(
   // 1
   // 2
-  3
+  // 3
   // NUM_CPUS - 2
   // NUM_CPUS - 1
   // NUM_CPUS
-  // NUM_CPUS / Math.LOG2E
+  NUM_CPUS / Math.LOG2E
   // NUM_CPUS / 2
   // NUM_CPUS / 4
   // NUM_CPUS * 2
@@ -46,6 +46,8 @@ export const MAX_CSV_WRITERS = Math.floor(
   // 2
   // 3
   // NUM_WORKERS / 2
-  NUM_WORKERS / 1.5
-  // NUM_WORKERS / Math.LOG2E
+  // NUM_WORKERS / 1.5
+  NUM_WORKERS / Math.LOG2E
+  // NUM_WORKERS - 1
+  // NUM_WORKERS
 );

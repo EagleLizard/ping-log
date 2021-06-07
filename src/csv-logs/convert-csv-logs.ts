@@ -25,25 +25,26 @@ const daysSinceNewInternet = (
 );
 
 let USE_TEST_DATES: boolean, daysInPast: number, pastDays: number;
-// USE_TEST_DATES = false;
-USE_TEST_DATES = true;
+USE_TEST_DATES = false;
+// USE_TEST_DATES = true;
 
 // pastDays = 3;
 // pastDays = 6;
-pastDays = 7;
+// pastDays = 7;
 // pastDays = 12;
-// pastDays = 14;
-// pastDays = 20;
+pastDays = 14;
+// pastDays = 28;
 // pastDays = 30;
 // pastDays = 60;
 // pastDays = 120;
 // pastDays = 240;
 
+// daysInPast = daysSinceNewInternet - Math.round(pastDays / 2);
 // daysInPast = daysSinceNewInternet + 3;
 // daysInPast = daysSinceNewInternet + 30;
 daysInPast = 0;
 // daysInPast = 3;
-// daysInPast = 30;
+// daysInPast = 32;
 
 function testFilterMeta(_hashLogMeta: _HashLogMetaValue[], minDate: Date): _HashLogMetaValue[] {
   if(USE_TEST_DATES === false) {
@@ -94,7 +95,7 @@ export async function convertCsvLogs() {
 
   convertTimer = Timer.start();
 
-  await concurrentConvertCsvLogsByDate(csvPathDates, _hashLogMeta);
+  await concurrentConvertCsvLogsByDate(csvPathDates, _hashLogMeta, fileHashTuples);
 
   deltaMs = convertTimer.stop();
   deltaSeconds = deltaMs / 1000;
@@ -108,7 +109,7 @@ export async function convertCsvLogs() {
   await destroyWorkers();
 }
 
-async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _HashLogMetaValue[]) {
+async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashLogMeta: _HashLogMetaValue[], _fileHashTuples: [ string, string ][]) {
   let recordCount: number;
   let totalFiles: number, fileDoneCount: number;
   let fileHashTuples: [ string, string ][];
@@ -193,14 +194,22 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
 
       convertLogPromise = queueConvertCsvLog(filePath, recordsCb, recordStartCb)
         .then(convertLogResult => {
+          const foundHash = _fileHashTuples.find(hashTuple => {
+            return hashTuple[0] === filePath;
+          });
+          if(!foundHash) {
+            throw new Error(`Missing hash val for: ${filePath}`);
+          }
           fileHashTuples.push([
             convertLogResult.filePath,
-            convertLogResult.fileHash,
+            foundHash[1],
           ]);
           return (async () => {
 
             while(asyncWrites > 0) {
+              // console.log(asyncWrites);
               await sleepImmediate();
+              // await sleep(0);
             }
             readLogTimesMs.push(readLogTimer.stop());
             fileDoneCount++;
@@ -270,7 +279,6 @@ async function concurrentConvertCsvLogsByDate(csvPathDates: CsvPathDate[], hashL
 
   console.log(`\nrecordCount: ${recordCount.toLocaleString()}`);
   const recordsWrotePerSecond = Math.round(recordCount / (deltaMs / 1000));
-  
 
   process.stdout.write('\n');
 

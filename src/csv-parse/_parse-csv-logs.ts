@@ -9,14 +9,13 @@ import { CONVERTED_CSV_LOGS_DIR_PATH, PERIOD_STAT_PATH } from '../constants';
 import { listDir } from '../lib/files';
 import { CsvAggregator } from '../csv-logs/csv-aggregator';
 // import { analyzeCsvLogs } from './analyze-csv-logs';
-import { CsvLogParseResult, parseCsvLog } from './parse-csv-log';
+import { CsvLogParseResult } from './parse-csv-log';
 import { destroyWorkers, initializePool, queueParseCsv } from '../worker-pool/worker-pool';
 import { getIntuitiveTimeFromMs, printProgress } from '../print';
 import { Timer } from '../lib/timer';
-import { sleep } from '../lib/sleep';
 
 export async function _parseCsvLogs() {
-  let csvLogPaths: string[], aggregator: CsvAggregator, csvParseResults: CsvLogParseResult[];
+  let csvLogPaths: string[], aggregator: CsvAggregator;
   let startMs: number, endMs: number, deltaMs: number, deltaT: number, deltaLabel: string;
   let recordCount: number, timer: Timer, recordsReadPerSecond: number;
 
@@ -24,7 +23,7 @@ export async function _parseCsvLogs() {
 
   csvLogPaths = sortCsvLogPaths(csvLogPaths);
 
-  csvLogPaths = csvLogPaths.slice(-5);
+  csvLogPaths = csvLogPaths.slice(-3);
   console.log(`num logs: ${csvLogPaths.length}`);
 
   timer = Timer.start();
@@ -52,7 +51,6 @@ export async function _parseCsvLogs() {
 
 async function parseLogsConcurrent(csvLogPaths: string[]): Promise<CsvLogParseResult> {
   let csvJobPromises: Promise<CsvLogParseResult>[], csvParseResults: CsvLogParseResult[], aggregator: CsvAggregator;
-  let deltaMs: number, deltaT: number, deltaLabel: string;
   let parseMs: number;
   let recordCount: number;
   let doneCount: number;
@@ -62,13 +60,13 @@ async function parseLogsConcurrent(csvLogPaths: string[]): Promise<CsvLogParseRe
   await initializePool();
   for(let i = 0, csvLogPath: string; csvLogPath = csvLogPaths[i], i < csvLogPaths.length; ++i) {
     let csvJobPromise: Promise<CsvLogParseResult>;
-    let staggerMs: number;
-    if(i !== 0) {
-      // staggerMs = 64 + Math.round(Math.random() * 64);
-      staggerMs = 32 + Math.round(Math.random() * 32);
-      // staggerMs = 16 + Math.round(Math.random() * 16);
-      await sleep(staggerMs);
-    }
+    // let staggerMs: number;
+    // if(i !== 0) {
+    //   // staggerMs = 64 + Math.round(Math.random() * 64);
+    //   staggerMs = 32 + Math.round(Math.random() * 32);
+    //   // staggerMs = 16 + Math.round(Math.random() * 16);
+    //   await sleep(staggerMs);
+    // }
 
     csvJobPromise = queueParseCsv(csvLogPath).then((parseResult) => {
       doneCount++;
@@ -95,19 +93,6 @@ async function parseLogsConcurrent(csvLogPaths: string[]): Promise<CsvLogParseRe
     parseMs,
     headers: []
   };
-}
-
-async function parseLogs(csvLogPaths: string[]): Promise<CsvLogParseResult[]> {
-  let csvLogParseResults: CsvLogParseResult[];
-  csvLogParseResults = [];
-  for(let i = 0, currPath: string; currPath = csvLogPaths[i], i < csvLogPaths.length; ++i) {
-    let currCsvLogParseResult: CsvLogParseResult;
-    currCsvLogParseResult = await parseCsvLog(currPath);
-    csvLogParseResults.push(currCsvLogParseResult);
-    printProgress(i + 1, csvLogPaths.length);
-  }
-  process.stdout.write('\n');
-  return csvLogParseResults;
 }
 
 function writeStat(csvAggregator: CsvAggregator): Promise<void> {
@@ -138,7 +123,20 @@ function writeStat(csvAggregator: CsvAggregator): Promise<void> {
       let pingAvg: number, failPercent: number;
       pingAvg = bucket.pingSum / bucket.successCount;
       failPercent = (bucket.failCount / bucket.recordCount) * 100;
-      writeStream.write(`${key}\n${bucket.recordCount}\n${pingAvg.toFixed(2)}\n${failPercent.toFixed(1)}%\n\n`);
+      writeStream.write(
+        (new Date(bucket.minStamp)).toLocaleString()
+      );
+      writeStream.write('\n');
+      writeStream.write(key);
+      writeStream.write('\n');
+      writeStream.write(`${bucket.recordCount}`);
+      writeStream.write('\n');
+      writeStream.write(pingAvg.toFixed(1));
+      writeStream.write('\n');
+      writeStream.write(`${failPercent.toFixed(1)}%`);
+      writeStream.write('\n');
+      writeStream.write('\n');
+
     });
     writeStream.end();
   });

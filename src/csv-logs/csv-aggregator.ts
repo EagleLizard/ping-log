@@ -4,6 +4,8 @@ interface TimeBucket {
   pingSum: number;
   successCount: number;
   failCount: number;
+  minStamp: number,
+  maxStamp: number;
 }
 
 export class CsvAggregator {
@@ -13,7 +15,7 @@ export class CsvAggregator {
   }
 
   aggregate(headers: any[], record: any[]) {
-    let id: number, timestamp: number, uri: string, pingMs: number;
+    let timestamp: number, uri: string, pingMs: number;
     let bucketKey: string, bucket: TimeBucket;
     // id = +record[0];
     timestamp = +record[0];
@@ -66,28 +68,47 @@ export class CsvAggregator {
         (bucket.pingSum = bucket.pingSum + pingMs)
       )
     );
-
+    if(bucket.minStamp > timestamp) {
+      bucket.minStamp = timestamp;
+    }
+    if(bucket.maxStamp < timestamp) {
+      bucket.maxStamp = timestamp;
+    }
   }
 
   getBucketKey(timestamp: number, uri: string) {
     let timeString: string, month: string, day: string, year: number;
-    let minutes: number;
-    let hours: string, minutesStr: string, seconds: string;
+    let minutes: number, hours: number;
+    let hoursStr: string, minutesStr: string, seconds: string;
+
     let d: Date, key: string;
+
     d = new Date(timestamp);
+
+    minutes = d.getMinutes();
+    hours = d.getHours();
     year = d.getFullYear();
+
     month = `${d.getMonth() + 1}`.padStart(2, '0');
     day = `${d.getDate()}`.padStart(2, '0');
-    hours = `${d.getHours()}`.padStart(2, '0');
-    minutes = d.getMinutes();
-    ((minutes % 15) !== 0)
-    && (
-      minutes = (minutes - (minutes % 15))
-    );
+    hoursStr = `${hours}`.padStart(2, '0');
+    if((minutes % 15) !== 0) {
+      if(minutes < 15) {
+        minutes = 0;
+      } else {
+        minutes = (minutes - (minutes % 15));
+      }
+    }
+    // ((minutes % 15) !== 0)
+    // && (
+    //   minutes = (minutes - (minutes % 15))
+    // );
     minutesStr = `${minutes}`.padStart(2, '0');
     seconds = `${d.getSeconds()}`.padStart(2, '0');
+
     // timeString = `${hours}:${minutes}:${seconds}`;
-    timeString = `${hours}:${minutesStr}`;
+    timeString = `${hoursStr}:${minutesStr}`;
+    // timeString = `${hours}`;
     key = `${year}-${month}-${day}_${timeString}`;
     return key;
   }
@@ -115,5 +136,7 @@ function getBucket(): TimeBucket {
     pingSum: 0,
     successCount: 0,
     failCount: 0,
+    minStamp: Infinity,
+    maxStamp: -1,
   };
 }

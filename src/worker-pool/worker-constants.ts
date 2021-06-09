@@ -47,7 +47,12 @@ export const MAX_CSV_WRITERS = Math.floor(
   // 3
   // NUM_WORKERS / 2
   // NUM_WORKERS / 1.5
-  NUM_WORKERS / Math.LOG2E
+  // NUM_WORKERS / Math.LOG2E
   // NUM_WORKERS - 1
-  // NUM_WORKERS
+  NUM_WORKERS
+);
+
+export const MAX_CSV_READERS = Math.floor(
+  // NUM_WORKERS / 2
+  NUM_WORKERS / Math.LOG2E
 );

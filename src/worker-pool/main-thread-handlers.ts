@@ -10,6 +10,7 @@ import { CsvReadResult } from '../csv-parse/read-csv-log';
 import {
   MESSAGE_TYPES,
   MAX_CSV_WRITERS,
+  MAX_CSV_READERS,
 } from './worker-constants';
 
 export interface AsyncCsvWriter {
@@ -369,6 +370,7 @@ export function checkQueues() {
     while(
       (availableWorkers.length > 0)
       && (convertLogQueue.length > 0)
+      && (runningConvertLogJobs.length < MAX_CSV_READERS)
     ) {
       availableWorker = removeWorker();
       convertLogJob = convertLogQueue.shift();

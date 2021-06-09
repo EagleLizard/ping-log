@@ -21,10 +21,10 @@ export const ASYNC_READ_RECORD_QUEUE_SIZE = Math.round(
   // 1024
   // 2048
   // 4096
-  8192
+  // 8192
 
   // 1.024e4
-  // 1.6384e4
+  1.6384e4
   // 3.2768e4
   // 6.5536e4
   // 8.056e4
@@ -189,7 +189,7 @@ export function handleConvertCsvLog(msg: WorkerMessage) {
         messageType: MESSAGE_TYPES.CONVERT_CSV_LOG_RECORD_READ,
         data: {
           filePath,
-          records: recordQueue.slice(),
+          records: recordQueue,
         },
       });
       recordQueue.length = 0;

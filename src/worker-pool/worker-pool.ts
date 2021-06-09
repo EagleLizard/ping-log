@@ -10,6 +10,7 @@ import {
   MESSAGE_TYPES,
   MAX_CSV_WRITERS,
   NUM_WORKERS,
+  MAX_CSV_READERS,
 } from './worker-constants';
 import { WorkerMessage } from './worker-message';
 import {
@@ -163,7 +164,8 @@ async function initMainThread() {
   console.log('initializing main thread');
   console.log(`NUM_WORKERS: ${NUM_WORKERS}`);
   console.log(`ASYNC_READ_RECORD_QUEUE_SIZE: ${ASYNC_READ_RECORD_QUEUE_SIZE.toLocaleString()}`);
-  console.log(`MAX_CSV_WRITERS: ${MAX_CSV_WRITERS}`)
+  console.log(`MAX_CSV_WRITERS: ${MAX_CSV_WRITERS}`);
+  console.log(`MAX_CSV_READERS: ${MAX_CSV_READERS}`);
   for(let i = 0; i < NUM_WORKERS; ++i) {
     let worker: Worker;
     worker = new Worker(__filename);
